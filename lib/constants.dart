@@ -1,44 +1,33 @@
-/// Set to false once you're testing on a real Android device with the rover
-/// powered on. true  = DemoBtService (simulated devices + telemetry, runs
-/// anywhere, no hardware). false = RealBtService (bluetooth_classic, Android
-/// only). See services/bt_service.dart and services/real_bt_service.dart.
-const bool useDemoBluetooth = true;
+/// Demo transport is opt-in so a production/test phone does not silently
+/// pretend to be connected to an HC-05. Enable it with:
+/// flutter run --dart-define=ROVER_DEMO=true
+const bool useDemoBluetooth = bool.fromEnvironment(
+  'ROVER_DEMO',
+  defaultValue: false,
+);
 
-/// Standard SPP UUID most HC-05 modules advertise by default. Only change
-/// this if your firmware/module configuration uses a different service UUID.
+/// Standard SPP UUID used by HC-05 modules in serial mode.
 const String sppUuid = '00001101-0000-1000-8000-00805f9b34fb';
 
-/// PLACEHOLDER single-character drive commands, carried over from the HTML
-/// prototype. These are NOT confirmed against your STM32 UART parser — swap
-/// them for your real protocol before relying on manual drive over a real
-/// link. See README.md.
+/// IMPORTANT: these command tokens are still the protocol expected by the
+/// current app prototype. They are not a verified STM32 firmware contract.
+/// Keep this file as the single source of truth until the firmware parser is
+/// available and the wire protocol can be verified end-to-end.
 const String cmdForward = 'F';
 const String cmdBack = 'B';
 const String cmdLeft = 'L';
 const String cmdRight = 'R';
 const String cmdStop = 'S';
-
-/// Door actuator (servo on a PWM pin, per what you confirmed). PLACEHOLDER
-/// command strings — you said you'd give the real angle/command values, so
-/// treat these as stand-ins until then, same as the drive commands above.
 const String cmdDoorOpen = 'DOOR_OPEN';
 const String cmdDoorClose = 'DOOR_CLOSE';
 
-/// Safety-strip thresholds, in centimetres, for the ultrasonic obstacle
-/// reading. Below [obstacleCriticalCm] the app latches the e-stop itself.
+/// Safety thresholds in centimetres.
 const double obstacleCriticalCm = 25;
 const double obstacleCautionCm = 60;
-
-/// Distance (ultrasonic, cm) at which the door-open trigger fires, once the
-/// person is centered and facing the camera. ~1m per what you described —
-/// tune once you can test the actual approach distance you want.
 const double doorApproachCm = 100;
 
-/// How far off-center (as a fraction of frame width, 0=dead center,
-/// 1=edge of frame) the detected face can be before we call it "centered"
-/// for the purposes of the door trigger.
+/// Camera bearing tolerance: 0 = centre, +/-1 = frame edge.
 const double centeredBearingThreshold = 0.12;
 
-/// Head yaw (degrees) within which we call the person "facing the camera".
-/// ML Kit's headEulerAngleY: 0 = facing camera, larger = turned away.
+/// Maximum absolute head yaw accepted as "facing the rover".
 const double facingYawThresholdDeg = 20;
