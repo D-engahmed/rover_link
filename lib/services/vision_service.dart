@@ -1,15 +1,17 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:io';
 import 'dart:ui' show Size;
+
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class PersonSighting {
   final bool present;
-  final double bearingFrac; // -1 (far left) .. +1 (far right), 0 = centered
-  final double sizeFrac; // face bbox height / image height — proxy for closeness
+  final double bearingFrac;
+  final double sizeFrac;
   final bool facingCamera;
-  final double headYawDeg; // 0 = facing camera, larger = turned away
+  final double headYawDeg;
+
   const PersonSighting({
     required this.present,
     this.bearingFrac = 0,
@@ -17,27 +19,15 @@ class PersonSighting {
     this.facingCamera = false,
     this.headYawDeg = 0,
   });
+
   static const none = PersonSighting(present: false);
 }
 
-/// Wraps the phone camera + Google ML Kit Face Detection to answer the two
-/// questions RSSI and a magnetometer never could: which direction is the
-/// person actually in, and are they facing the rover. This is what solves
-/// the "stance" part of your door-trigger logic, using headEulerAngleY —
-/// no separate pose model needed for v1.
+/// Phone-camera perception for the follow/door workflow.
 ///
-/// NOT COMPILED OR RUN HERE — same disclaimer as real_bt_service.dart. This
-/// sandbox can't install Flutter or camera/ML Kit native dependencies. The
-/// camera-image-to-InputImage conversion in [_toInputImage] is the single
-/// most version-sensitive part of this file (plane format, rotation,
-/// byte layout differ across camera package versions) — if face detection
-/// silently returns nothing once you run this, check that function first
-/// against the current `camera` + `google_mlkit_face_detection` example
-/// apps on pub.dev, since the conversion recipe does shift between
-/// versions.
-///
-/// Also: camera + ML Kit need a real device. Most emulators either have no
-/// camera or a fake feed that won't produce detectable faces.
+/// ML Kit is fed only formats it supports for the target platform:
+/// NV21 on Android and BGRA8888 on iOS. The old implementation concatenated
+/// arbitrary camera planes, which could silently produce invalid ML Kit input.
 class VisionService {
   CameraController? _controller;
   final _detector = FaceDetector(
@@ -48,23 +38,42 @@ class VisionService {
   );
   final _sightingCtrl = StreamController<PersonSighting>.broadcast();
   bool _busy = false;
+  bool _starting = false;
 
   Stream<PersonSighting> get sightings => _sightingCtrl.stream;
+  CameraController? get controller => _controller;
 
   Future<void> start() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) {
-      throw StateError('No cameras available on this device.');
+    if (_starting || (_controller?.value.isInitialized ?? false)) return;
+    _starting = true;
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        throw StateError('No cameras available on this device.');
+      }
+
+      final cam = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      final imageFormat = Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888;
+
+      final controller = CameraController(
+        cam,
+        ResolutionPreset.low,
+        enableAudio: false,
+        imageFormatGroup: imageFormat,
+      );
+
+      _controller = controller;
+      await controller.initialize();
+      await controller.startImageStream(_onFrame);
+    } finally {
+      _starting = false;
     }
-    // Back camera: the rover is "looking" for the person out in front of
-    // it, same as the physical ultrasonic sensor's field of view.
-    final cam = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.back,
-      orElse: () => cameras.first,
-    );
-    _controller = CameraController(cam, ResolutionPreset.low, enableAudio: false);
-    await _controller!.initialize();
-    await _controller!.startImageStream(_onFrame);
   }
 
   void _onFrame(CameraImage image) {
@@ -74,74 +83,115 @@ class VisionService {
   }
 
   Future<void> _processFrame(CameraImage image) async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+
     try {
-      final inputImage = _toInputImage(image, _controller!.description);
+      final inputImage = _toInputImage(image, controller.description);
       if (inputImage == null) return;
+
       final faces = await _detector.processImage(inputImage);
       if (faces.isEmpty) {
         _sightingCtrl.add(PersonSighting.none);
         return;
       }
-      // Largest face in frame = nearest / most relevant person.
-      faces.sort((a, b) => b.boundingBox.height.compareTo(a.boundingBox.height));
-      final f = faces.first;
-      final imgW = image.width.toDouble();
-      final imgH = image.height.toDouble();
-      final cx = f.boundingBox.left + f.boundingBox.width / 2;
-      final bearingFrac = (((cx / imgW) - 0.5) * 2).clamp(-1.0, 1.0);
-      final sizeFrac = (f.boundingBox.height / imgH).clamp(0.0, 1.0);
-      final yaw = f.headEulerAngleY ?? 0;
+
+      faces.sort(
+        (a, b) => b.boundingBox.height.compareTo(a.boundingBox.height),
+      );
+      final face = faces.first;
+      final imageWidth = image.width.toDouble();
+      final imageHeight = image.height.toDouble();
+      if (imageWidth <= 0 || imageHeight <= 0) return;
+
+      final centerX = face.boundingBox.left + face.boundingBox.width / 2;
+      final bearing = (((centerX / imageWidth) - 0.5) * 2)
+          .clamp(-1.0, 1.0)
+          .toDouble();
+      final size = (face.boundingBox.height / imageHeight)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final yaw = face.headEulerAngleY ?? 0.0;
+
       _sightingCtrl.add(PersonSighting(
         present: true,
-        bearingFrac: bearingFrac,
-        sizeFrac: sizeFrac,
+        bearingFrac: bearing,
+        sizeFrac: size,
         facingCamera: yaw.abs() < 20,
         headYawDeg: yaw,
       ));
     } catch (_) {
-      // Drop this frame; the next one will retry. A single bad frame
-      // shouldn't kill the stream.
+      // Drop a bad frame. Perception must remain alive for the next frame.
     }
   }
 
-  InputImage? _toInputImage(CameraImage image, CameraDescription description) {
+  InputImage? _toInputImage(
+    CameraImage image,
+    CameraDescription description,
+  ) {
     try {
-      final bytes = _concatenatePlanes(image.planes);
-      final rotation =
-          InputImageRotationValue.fromRawValue(description.sensorOrientation) ??
-              InputImageRotation.rotation0deg;
-      final format =
-          InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
-      return InputImage.fromBytes(
-        bytes: bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: format,
-          bytesPerRow: image.planes.first.bytesPerRow,
-        ),
-      );
+      if (Platform.isAndroid) {
+        // CameraX may report yuv420 while the payload is configured as NV21.
+        // ML Kit accepts the NV21 payload as a single plane in this mode.
+        if (image.planes.length != 1) return null;
+        final format = InputImageFormatValue.fromRawValue(image.format.raw);
+        if (format != InputImageFormat.nv21) return null;
+        final plane = image.planes.first;
+        return InputImage.fromBytes(
+          bytes: plane.bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: _androidRotation(description.sensorOrientation),
+            format: InputImageFormat.nv21,
+            bytesPerRow: plane.bytesPerRow,
+          ),
+        );
+      }
+
+      if (Platform.isIOS) {
+        if (image.planes.length != 1) return null;
+        final format = InputImageFormatValue.fromRawValue(image.format.raw);
+        if (format != InputImageFormat.bgra8888) return null;
+        final plane = image.planes.first;
+        return InputImage.fromBytes(
+          bytes: plane.bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: InputImageRotation.rotation0deg,
+            format: InputImageFormat.bgra8888,
+            bytesPerRow: plane.bytesPerRow,
+          ),
+        );
+      }
     } catch (_) {
-      return null;
+      // Unsupported platform/format: perception simply stays inactive.
     }
+    return null;
   }
 
-  Uint8List _concatenatePlanes(List<Plane> planes) {
-    final buffer = BytesBuilder();
-    for (final plane in planes) {
-      buffer.add(plane.bytes);
-    }
-    return buffer.toBytes();
+  InputImageRotation _androidRotation(int sensorOrientation) {
+    return InputImageRotationValue.fromRawValue(sensorOrientation) ??
+        InputImageRotation.rotation0deg;
   }
 
   Future<void> stop() async {
-    await _controller?.stopImageStream();
-    await _controller?.dispose();
+    final controller = _controller;
     _controller = null;
+    _busy = false;
+    if (controller == null) return;
+
+    try {
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // Camera may already have stopped due to lifecycle/permission changes.
+    }
+    await controller.dispose();
   }
 
   void dispose() {
-    stop();
+    unawaited(stop());
     _detector.close();
     _sightingCtrl.close();
   }
