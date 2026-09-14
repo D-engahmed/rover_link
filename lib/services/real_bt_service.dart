@@ -4,39 +4,29 @@ import 'package:bluetooth_classic/models/device.dart' as bc;
 import 'bt_service.dart';
 import '../constants.dart';
 
-/// Wraps the `bluetooth_classic` package (Android-only, RFCOMM/SPP) — the
-/// actual transport your STM32 talks over via HC-05.
+/// Android RFCOMM/SPP transport for an HC-05 connected to the STM32 rover.
 ///
-/// NOT VERIFIED AGAINST REAL HARDWARE OR EVEN COMPILED. Written from the
-/// package's published docs/examples (checked live via search), but this
-/// sandbox has no Flutter SDK and no network access to pub.dev, so none of
-/// this has been run. Test on a real Android phone with the rover powered
-/// on — emulators don't have real Bluetooth radios — and send back whatever
-/// `flutter analyze` / `flutter run` gives you; the method names and Device
-/// model fields below are the most likely place for a version mismatch.
-///
-/// Also, deliberately: this only targets Android. iOS cannot talk to HC-05
-/// at all without Apple's MFi accessory certification, which HC-05 doesn't
-/// have. If iOS ever becomes a requirement, that's a hardware decision (a
-/// BLE module instead of HC-05), not something fixable in this file.
+/// The UI talks only to BtService; all plugin-specific behavior stays here.
 class RealBtService implements BtService {
   final _plugin = BluetoothClassic();
   final _linkStateCtrl = StreamController<BtLinkState>.broadcast();
   final _deviceCtrl = StreamController<BtDevice>.broadcast();
   final _lineCtrl = StreamController<String>.broadcast();
   final _errorCtrl = StreamController<String>.broadcast();
+
   String _rxBuffer = '';
   bool _permissionsReady = false;
+  bool _disposed = false;
 
   RealBtService() {
     _plugin.onDeviceDiscovered().listen((bc.Device d) {
-      _deviceCtrl.add(BtDevice(name: d.name ?? d.address, address: d.address));
+      if (!_disposed) {
+        _deviceCtrl.add(BtDevice(name: d.name ?? d.address, address: d.address));
+      }
     });
 
     _plugin.onDeviceStatusChanged().listen((int status) {
-      // bc.Device.connected / bc.Device.disconnected are the documented
-      // status ints for this package — confirm they match the version
-      // that actually resolves when you run `flutter pub get`.
+      if (_disposed) return;
       if (status == bc.Device.connected) {
         _linkStateCtrl.add(BtLinkState.connected);
       } else if (status == bc.Device.disconnected) {
@@ -45,22 +35,37 @@ class RealBtService implements BtService {
     });
 
     _plugin.onDeviceDataReceived().listen((List<int> bytes) {
+      if (_disposed) return;
       _rxBuffer += String.fromCharCodes(bytes);
-      while (_rxBuffer.contains('\n')) {
-        final idx = _rxBuffer.indexOf('\n');
-        final line = _rxBuffer.substring(0, idx).trim();
-        _rxBuffer = _rxBuffer.substring(idx + 1);
-        if (line.isNotEmpty) _lineCtrl.add(line);
-      }
+      _drainLines();
     });
+  }
+
+  void _drainLines() {
+    while (true) {
+      final newline = _rxBuffer.indexOf('\n');
+      if (newline < 0) break;
+
+      final line = _rxBuffer.substring(0, newline).trim();
+      _rxBuffer = _rxBuffer.substring(newline + 1);
+      if (line.isNotEmpty) _lineCtrl.add(line);
+    }
+
+    // Prevent an unplugged/corrupt stream from growing without bound.
+    if (_rxBuffer.length > 8192) {
+      _rxBuffer = _rxBuffer.substring(_rxBuffer.length - 4096);
+    }
   }
 
   @override
   Stream<BtLinkState> get linkState => _linkStateCtrl.stream;
+
   @override
   Stream<BtDevice> get deviceDiscovered => _deviceCtrl.stream;
+
   @override
   Stream<String> get linesReceived => _lineCtrl.stream;
+
   @override
   Stream<String> get connectionError => _errorCtrl.stream;
 
@@ -77,11 +82,14 @@ class RealBtService implements BtService {
     try {
       final paired = await _plugin.getPairedDevices();
       for (final d in paired) {
-        _deviceCtrl.add(BtDevice(name: d.name ?? d.address, address: d.address));
+        if (!_disposed) {
+          _deviceCtrl.add(BtDevice(name: d.name ?? d.address, address: d.address));
+        }
       }
       await _plugin.startScan();
     } catch (e) {
       _errorCtrl.add('Scan failed: $e');
+      _linkStateCtrl.add(BtLinkState.disconnected);
     }
   }
 
@@ -90,18 +98,19 @@ class RealBtService implements BtService {
     try {
       await _plugin.stopScan();
     } catch (_) {
-      // Non-fatal — the scan may already have stopped.
+      // Scan may already have stopped.
     }
   }
 
   @override
   Future<void> connect(BtDevice device) async {
+    await _ensurePermissions();
     _linkStateCtrl.add(BtLinkState.connecting);
     try {
       await _plugin.connect(device.address, sppUuid);
       _linkStateCtrl.add(BtLinkState.connected);
     } catch (e) {
-      _errorCtrl.add("Could not connect to ${device.name}: $e");
+      _errorCtrl.add('Could not connect to ${device.name}: $e');
       _linkStateCtrl.add(BtLinkState.disconnected);
     }
   }
@@ -111,17 +120,22 @@ class RealBtService implements BtService {
     try {
       await _plugin.disconnect();
     } finally {
-      _linkStateCtrl.add(BtLinkState.disconnected);
+      if (!_disposed) _linkStateCtrl.add(BtLinkState.disconnected);
     }
   }
 
   @override
   Future<void> writeLine(String data) async {
-    await _plugin.write(data);
+    // The rover protocol is line-delimited. Do not rely on the caller to
+    // remember the framing or STM32 commands can be concatenated/ignored.
+    final framed = data.endsWith('\n') ? data : '$data\r\n';
+    await _plugin.write(framed);
   }
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _linkStateCtrl.close();
     _deviceCtrl.close();
     _lineCtrl.close();
