@@ -4,21 +4,15 @@ publish_to: 'none'
 version: 0.1.0
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.44.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  # Android-only classic Bluetooth (RFCOMM/SPP). Verified publisher, small
-  # API surface, built for exactly this use case (HC-05/ESP32/Arduino serial).
-  # If constants.useDemoBluetooth stays true you don't need this yet — the
-  # demo transport has no dependency on it at all.
+  # Android-only classic Bluetooth (RFCOMM/SPP) for HC-05/STM32 serial control.
   bluetooth_classic: ^0.0.4
-  # Official Flutter team camera plugin.
   camera: ^0.12.1
-  # flutter-ml.dev (verified publisher) — actively maintained, includes
-  # recent AGP8/compileSdk-35 fixes per its changelog (checked before
-  # picking this, after bluetooth_classic's compileSdk problem).
   google_mlkit_face_detection: ^0.15.1
 
 dev_dependencies:
