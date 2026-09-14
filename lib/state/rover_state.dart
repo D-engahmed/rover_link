@@ -5,10 +5,6 @@ import '../services/vision_service.dart';
 import '../constants.dart';
 
 enum DriveMode { manual, follow }
-
-/// Three ways of answering "which way is the person": gradient search
-/// (works today, no hardware), compass/IMU (locked — no sensor installed),
-/// and camera (face detection — also answers the stance/door question).
 enum BearingSource { gradientSearch, compassImu, camera }
 
 class LogEntry {
@@ -43,12 +39,10 @@ class RoverState extends ChangeNotifier {
   late final StreamSubscription _lineSub;
   late final StreamSubscription _errorSub;
 
-  // ---- connection ----
   BtLinkState linkState = BtLinkState.disconnected;
   List<BtDevice> discoveredDevices = [];
   String? lastConnectError;
   BtDevice? connectedDevice;
-
   bool get connected => linkState == BtLinkState.connected;
 
   Future<void> startScan() async {
@@ -66,7 +60,7 @@ class RoverState extends ChangeNotifier {
   }
 
   Future<void> disconnectRover() async {
-    if (mode == DriveMode.follow) setMode(DriveMode.manual);
+    if (mode == DriveMode.follow) await setMode(DriveMode.manual);
     await bt.disconnect();
   }
 
@@ -74,21 +68,22 @@ class RoverState extends ChangeNotifier {
     linkState = s;
     if (s == BtLinkState.connected) {
       _pushTerm(LogEntry(
-          'Connected${connectedDevice != null ? ' to ${connectedDevice!.name} (${connectedDevice!.address})' : ''}, 9600 baud.'));
+        'Connected${connectedDevice != null ? ' to ${connectedDevice!.name} (${connectedDevice!.address})' : ''}, 9600 baud.',
+      ));
       nearestObstacleCm = 160;
-    }
-    if (s == BtLinkState.disconnected) {
+    } else if (s == BtLinkState.disconnected) {
       _pushTerm(LogEntry('Disconnected.'));
       nearestObstacleCm = null;
+      // A broken link must never leave the rover logically driving.
+      if (mode == DriveMode.follow) mode = DriveMode.manual;
+      doorOpen = false;
     }
     notifyListeners();
   }
 
-  // ---- safety ----
   double? nearestObstacleCm;
   bool estopped = false;
 
-  /// 'ok' | 'caution' | 'crit'
   String get safetyState {
     if (estopped) return 'crit';
     if (nearestObstacleCm == null) return 'ok';
@@ -99,16 +94,29 @@ class RoverState extends ChangeNotifier {
 
   void toggleEstop([bool? forceOn]) {
     estopped = forceOn ?? !estopped;
-    _pushTerm(LogEntry(estopped
-        ? 'Motors stopped. Drive input locked until reset.'
-        : 'Reset. Drive input re-armed.'));
+    if (estopped) {
+      // Best effort: the stop command is sent even though drive() is locked.
+      unawaited(_sendRawStop());
+      _pushTerm(LogEntry('Motors stopped. Drive input locked until reset.'));
+    } else {
+      _pushTerm(LogEntry('Reset. Drive input re-armed.'));
+    }
     notifyListeners();
   }
 
-  // ---- mode ----
+  Future<void> _sendRawStop() async {
+    if (!connected) return;
+    try {
+      await bt.writeLine('CMD:$cmdStop');
+    } catch (e) {
+      _errorLog('E-stop transmit failed: $e');
+    }
+  }
+
   DriveMode mode = DriveMode.manual;
 
-  void setMode(DriveMode m) {
+  Future<void> setMode(DriveMode m) async {
+    if (m == mode) return;
     if (m == DriveMode.follow) {
       if (!connected) {
         _pushAi(LogEntry('Cannot start — connect the rover first.'));
@@ -122,22 +130,35 @@ class RoverState extends ChangeNotifier {
       }
       distanceHistoryCm = [];
       _prevDistCm = null;
-      _pushAi(LogEntry(
-          'Follow me: tracking phone via RSSI, checking path with ultrasonic.'));
+      _pushAi(LogEntry('Follow me started.'));
+      if (bearingSource == BearingSource.camera) {
+        try {
+          await _vision?.start();
+        } catch (e) {
+          steeringText = 'CAMERA ERROR';
+          _pushAi(LogEntry('Camera unavailable: $e'));
+        }
+      }
     } else if (mode == DriveMode.follow) {
       _pushAi(LogEntry('Follow me stopped. Manual control only.'));
-      if (doorOpen) closeDoor();
+      await _vision?.stop();
+      if (doorOpen) await closeDoor();
+      await _sendRawStop();
     }
     mode = m;
     notifyListeners();
   }
 
-  // ---- manual drive ----
   int speedPercent = 60;
   String lastCommand = '$cmdStop · STOP';
 
   Future<void> drive(String code, String label) async {
     if (!connected || estopped) return;
+    // Never allow movement through the UI while the obstacle safety state is critical.
+    if (nearestObstacleCm != null && nearestObstacleCm! < obstacleCriticalCm && code != cmdStop) {
+      toggleEstop(true);
+      return;
+    }
     lastCommand = '$code · $label';
     await bt.writeLine('CMD:$code');
     _pushTerm(LogEntry('TX CMD:$code'));
@@ -145,9 +166,9 @@ class RoverState extends ChangeNotifier {
   }
 
   Future<void> setSpeed(int v) async {
-    speedPercent = v;
-    final pwm = (v / 100 * 255).round();
-    if (connected) {
+    speedPercent = v.clamp(0, 100);
+    final pwm = (speedPercent / 100 * 255).round();
+    if (connected && !estopped) {
       await bt.writeLine('PWM:$pwm');
       _pushTerm(LogEntry('TX PWM:$pwm'));
     }
@@ -160,6 +181,7 @@ class RoverState extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (cmd != 'STOP' && estopped) return;
     await bt.writeLine(cmd);
     _pushTerm(LogEntry('TX $cmd'));
     if (cmd == 'STOP') toggleEstop(true);
@@ -167,23 +189,28 @@ class RoverState extends ChangeNotifier {
   }
 
   Future<void> sendCustom(String raw) async {
-    if (raw.isEmpty || !connected) return;
+    if (raw.isEmpty || !connected || estopped) return;
     await bt.writeLine(raw);
     _pushTerm(LogEntry('TX $raw'));
     notifyListeners();
   }
 
-  // ---- door actuator ----
   bool doorOpen = false;
 
   Future<void> openDoor() async {
-    if (doorOpen || !connected) return;
+    if (doorOpen || !connected || estopped) return;
     doorOpen = true;
-    await bt.writeLine(cmdDoorOpen);
-    _pushTerm(LogEntry('TX $cmdDoorOpen'));
-    _pushAi(LogEntry(
+    try {
+      await bt.writeLine(cmdDoorOpen);
+      _pushTerm(LogEntry('TX $cmdDoorOpen'));
+      _pushAi(LogEntry(
         'Person centered and facing the rover, ${nearestObstacleCm?.round()}cm out — opening door.',
-        emphasis: true));
+        emphasis: true,
+      ));
+    } catch (e) {
+      doorOpen = false;
+      _errorLog('Door-open transmit failed: $e');
+    }
     notifyListeners();
   }
 
@@ -191,13 +218,16 @@ class RoverState extends ChangeNotifier {
     if (!doorOpen) return;
     doorOpen = false;
     if (connected) {
-      await bt.writeLine(cmdDoorClose);
-      _pushTerm(LogEntry('TX $cmdDoorClose'));
+      try {
+        await bt.writeLine(cmdDoorClose);
+        _pushTerm(LogEntry('TX $cmdDoorClose'));
+      } catch (e) {
+        _errorLog('Door-close transmit failed: $e');
+      }
     }
     notifyListeners();
   }
 
-  // ---- bearing / follow-me ----
   BearingSource bearingSource = BearingSource.gradientSearch;
   String steeringText = '—';
   double? targetDistanceCm;
@@ -206,10 +236,8 @@ class RoverState extends ChangeNotifier {
   String _searchDir = 'LEFT';
   PersonSighting lastSighting = PersonSighting.none;
 
-  /// Call once, from main.dart, with a VisionService instance. Kept separate
-  /// from the constructor so the demo build (no camera needed) doesn't have
-  /// to construct one it won't use.
   void attachVision(VisionService vision) {
+    _visionSub?.cancel();
     _vision = vision;
     _visionSub = vision.sightings.listen(_onSighting);
   }
@@ -218,17 +246,29 @@ class RoverState extends ChangeNotifier {
     bearingSource = s;
     if (s == BearingSource.compassImu) {
       steeringText = '— (no IMU installed)';
-      _pushAi(LogEntry(
-          'Switched to Compass/IMU mode — no heading sensor on the board.'));
+      unawaited(_vision?.stop());
+      _pushAi(LogEntry('Switched to Compass/IMU mode — no heading sensor on the board.'));
     } else if (s == BearingSource.camera) {
       steeringText = mode == DriveMode.follow ? 'SEARCHING — no one in frame' : '—';
-      _pushAi(LogEntry(
-          'Switched to camera mode — steering off the detected face, door trigger armed.'));
-      _vision?.start();
+      _pushAi(LogEntry('Switched to camera mode — steering off the detected face, door trigger armed.'));
+      if (mode == DriveMode.follow) {
+        unawaited(_startVisionSafely());
+      }
     } else {
       steeringText = mode == DriveMode.follow ? 'HOLD' : '—';
+      unawaited(_vision?.stop());
     }
     notifyListeners();
+  }
+
+  Future<void> _startVisionSafely() async {
+    try {
+      await _vision?.start();
+    } catch (e) {
+      steeringText = 'CAMERA ERROR';
+      _pushAi(LogEntry('Camera unavailable: $e'));
+      notifyListeners();
+    }
   }
 
   void _onSighting(PersonSighting s) {
@@ -236,7 +276,7 @@ class RoverState extends ChangeNotifier {
     if (mode == DriveMode.follow && bearingSource == BearingSource.camera) {
       if (!s.present) {
         steeringText = 'SEARCHING — no one in frame';
-        if (doorOpen) closeDoor();
+        if (doorOpen) unawaited(closeDoor());
       } else {
         steeringText = s.bearingFrac.abs() < centeredBearingThreshold
             ? 'HOLD — centered'
@@ -253,10 +293,9 @@ class RoverState extends ChangeNotifier {
         lastSighting.bearingFrac.abs() < centeredBearingThreshold &&
         lastSighting.facingCamera;
     final closeEnough = nearestObstacleCm != null && nearestObstacleCm! <= doorApproachCm;
-    if (centered && closeEnough) openDoor();
+    if (centered && closeEnough) unawaited(openDoor());
   }
 
-  // ---- logs ----
   final List<LogEntry> terminalLog = [];
   final List<LogEntry> aiLog = [];
   String consolePreview = 'idle';
@@ -272,24 +311,31 @@ class RoverState extends ChangeNotifier {
     if (aiLog.length > 300) aiLog.removeAt(0);
   }
 
-  /// PLACEHOLDER protocol parsing — see the note in bt_service.dart. These
-  /// '+US:' / '+DIST:' tags match the HTML mock's invented wire format, not
-  /// a confirmed firmware spec. Update this once you know your real format.
-  void _onLine(String line) {
-    _pushTerm(LogEntry('RX $line'));
+  void _errorLog(String message) {
+    _pushTerm(LogEntry(message, emphasis: true));
+  }
 
-    if (line.startsWith('+US:')) {
-      final v = double.tryParse(line.substring(4).replaceAll('cm', ''));
-      if (v != null && !estopped) {
+  void _onLine(String line) {
+    final normalized = line.trim();
+    if (normalized.isEmpty) return;
+    _pushTerm(LogEntry('RX $normalized'));
+
+    if (normalized.startsWith('+US:')) {
+      final v = double.tryParse(
+        normalized.substring(4).replaceAll(RegExp(r'cm$', caseSensitive: false), '').trim(),
+      );
+      if (v != null) {
         nearestObstacleCm = v;
-        if (nearestObstacleCm! < obstacleCriticalCm) {
+        if (v < obstacleCriticalCm) {
           toggleEstop(true);
         } else if (bearingSource == BearingSource.camera) {
           _maybeOpenDoor();
         }
       }
-    } else if (line.startsWith('+DIST:')) {
-      final v = double.tryParse(line.substring(6).replaceAll('m', ''));
+    } else if (normalized.startsWith('+DIST:')) {
+      final v = double.tryParse(
+        normalized.substring(6).replaceAll(RegExp(r'm$', caseSensitive: false), '').trim(),
+      );
       if (v != null) _handleDistanceSample(v * 100);
     }
     notifyListeners();
@@ -311,8 +357,9 @@ class RoverState extends ChangeNotifier {
           _searchDir = _searchDir == 'LEFT' ? 'RIGHT' : 'LEFT';
           steeringText = 'SEARCH $_searchDir';
           _pushAi(LogEntry(
-              'Signal weakening — turning ${_searchDir.toLowerCase()} to reacquire.',
-              emphasis: true));
+            'Signal weakening — turning ${_searchDir.toLowerCase()} to reacquire.',
+            emphasis: true,
+          ));
         } else {
           steeringText = 'HOLD';
         }
