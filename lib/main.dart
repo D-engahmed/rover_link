@@ -6,10 +6,14 @@ import 'services/vision_service.dart';
 import 'state/rover_state.dart';
 import 'screens/home_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
   final BtService bt = useDemoBluetooth ? DemoBtService() : RealBtService();
   final state = RoverState(bt);
-  state.attachVision(VisionService()); // camera only turns on if the person picks camera bearing mode
+  final vision = VisionService();
+  state.attachVision(vision);
+
   runApp(RoverLinkApp(state: state));
 }
 
