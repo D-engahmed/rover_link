@@ -1,213 +1,115 @@
 import 'package:flutter/material.dart';
-import '../models/rover_state.dart';
-import '../theme/app_theme.dart';
-import '../widgets/metric_tile.dart';
-import '../widgets/radar_view.dart';
+import '../constants.dart';
+import '../state/rover_state.dart';
+import '../widgets/controls.dart';
+import '../widgets/follow_me_panel.dart';
+import '../widgets/console_drawer.dart';
+import '../widgets/connect_sheet.dart';
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.state, required this.onChanged});
-
+class HomeScreen extends StatefulWidget {
   final RoverState state;
-  final VoidCallback onChanged;
+  const HomeScreen({super.key, required this.state});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _drawerOpen = false;
+
+  void _openConnectSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0A1420),
+      isScrollControlled: true,
+      builder: (_) => ConnectSheet(state: widget.state),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          _StatusHeader(state: state),
-          const SizedBox(height: 16),
-          SectionCard(
-            title: 'Live Environment',
-            child: Column(
-              children: [
-                AspectRatio(
-                  aspectRatio: 1,
-                  child: RadarView(
-                    targetBearingDeg: state.targetBearingDeg,
-                    targetDistanceM: state.targetDistanceM,
-                    obstacles: state.obstacles,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Distance',
-                        value: '${state.targetDistanceM.toStringAsFixed(2)} m',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Bearing',
-                        value: '${state.targetBearingDeg >= 0 ? '+' : ''}${state.targetBearingDeg.toStringAsFixed(0)}°',
-                        valueColor: RoverColors.cyan,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Confidence',
-                        value: '${state.confidencePct.toStringAsFixed(0)}%',
-                        valueColor: RoverColors.green,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          SectionCard(
-            title: 'Control Mode',
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: RoverMode.values.map((m) {
-                final selected = state.mode == m;
-                return ChoiceChip(
-                  label: Text(m.label),
-                  selected: selected,
-                  onSelected: (_) {
-                    state.setMode(m);
-                    onChanged();
-                  },
-                  selectedColor: RoverColors.panel2,
-                  backgroundColor: RoverColors.bg,
-                  side: BorderSide(color: selected ? RoverColors.cyan : RoverColors.line),
-                  labelStyle: TextStyle(
-                    color: selected ? RoverColors.cyan : RoverColors.muted,
-                    fontWeight: FontWeight.w600,
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          SectionCard(
-            title: 'Mission',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('TARGET', style: const TextStyle(color: RoverColors.muted, fontSize: 11)),
-                const SizedBox(height: 4),
-                Text(
-                  state.targetName,
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-                ),
-                const Divider(height: 28),
-                KeyValueRow(label: 'Distance', value: '${state.targetDistanceM.toStringAsFixed(2)} m'),
-                KeyValueRow(
-                  label: 'Bearing',
-                  value: '${state.targetBearingDeg >= 0 ? '+' : ''}${state.targetBearingDeg.toStringAsFixed(0)}°',
-                  valueColor: RoverColors.cyan,
-                ),
-                KeyValueRow(
-                  label: 'Confidence',
-                  value: '${state.confidencePct.toStringAsFixed(0)}%',
-                  valueColor: RoverColors.green,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  state.emergencyStop ? MissionStatus.emergency.label : state.missionStatus.label,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: state.emergencyStop ? RoverColors.red : RoverColors.green,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: state.confidencePct / 100,
-                    minHeight: 6,
-                    backgroundColor: RoverColors.panel2,
-                    color: RoverColors.green,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                if (state.emergencyStop) {
-                  state.clearEmergencyStop();
-                } else {
-                  state.triggerEmergencyStop();
-                }
-                onChanged();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF321217),
-                foregroundColor: RoverColors.red,
-                side: const BorderSide(color: Color(0xFF64232B)),
-                padding: const EdgeInsets.symmetric(vertical: 16),
+    final s = widget.state;
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
+          children: [
+            _AppBar(state: s, onTapConnection: _openConnectSheet),
+            SafetyStrip(state: s),
+            ModeSwitch(state: s),
+            QuickMacros(state: s),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                child: s.mode == DriveMode.manual
+                    ? ManualDrivePanel(state: s)
+                    : FollowMePanel(state: s),
               ),
-              icon: const Icon(Icons.stop_circle_outlined),
-              label: Text(state.emergencyStop ? 'RESUME MISSION' : 'EMERGENCY STOP'),
             ),
-          ),
-        ],
+            ConsoleDrawer(
+              state: s,
+              open: _drawerOpen,
+              onToggle: () => setState(() => _drawerOpen = !_drawerOpen),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _StatusHeader extends StatelessWidget {
-  const _StatusHeader({required this.state});
-
+class _AppBar extends StatelessWidget {
   final RoverState state;
+  final VoidCallback onTapConnection;
+  const _AppBar({required this.state, required this.onTapConnection});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
+    final connected = state.connected;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'SMART ROVER',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18, letterSpacing: 0.5),
-              ),
-              const Text('STM32F401 · HC-05', style: TextStyle(color: RoverColors.muted, fontSize: 12)),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: RoverColors.panel2,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: RoverColors.line),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: state.connected ? RoverColors.green : RoverColors.red,
+              const Text('Rover Link',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+              const Text('HC-05 · UART 9600 · STM32F401',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF5F8296))),
+              if (useDemoBluetooth)
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFFFB100)),
+                      borderRadius: BorderRadius.circular(3)),
+                  child: const Text('DEMO DATA — no BLE link',
+                      style: TextStyle(
+                          fontSize: 9, color: Color(0xFFFFB100), fontWeight: FontWeight.bold)),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                state.connected ? 'ONLINE' : 'OFFLINE',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-              ),
             ],
           ),
-        ),
-      ],
+          GestureDetector(
+            onTap: onTapConnection,
+            child: Row(
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: connected ? const Color(0xFF5EE08A) : const Color(0xFF5F8296)),
+                ),
+                const SizedBox(width: 6),
+                Text(connected ? 'HC-05 LINKED' : 'CONNECT',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

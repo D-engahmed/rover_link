@@ -1,5 +1,5 @@
 name: rover_link
-description: Unified Smart Autonomous Rover control app — mission control, manual drive, radar, and AI navigation for an STM32-based rover.
+description: Unified control + AI copilot app for the HC-05 / STM32F401 rover.
 publish_to: 'none'
 version: 0.1.0
 
@@ -9,11 +9,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  # HC-05 is classic Bluetooth (SPP), not BLE, so this needs a classic-serial
-  # package rather than flutter_blue_plus / flutter_reactive_ble. Android
-  # only — iOS does not expose the classic SPP profile to third-party apps.
-  flutter_bluetooth_serial: ^0.4.0
+  # Android-only classic Bluetooth (RFCOMM/SPP). Verified publisher, small
+  # API surface, built for exactly this use case (HC-05/ESP32/Arduino serial).
+  # If constants.useDemoBluetooth stays true you don't need this yet — the
+  # demo transport has no dependency on it at all.
+  bluetooth_classic: ^0.0.4
+  # Official Flutter team camera plugin.
+  camera: ^0.11.0
+  # flutter-ml.dev (verified publisher) — actively maintained, includes
+  # recent AGP8/compileSdk-35 fixes per its changelog (checked before
+  # picking this, after bluetooth_classic's compileSdk problem).
+  google_mlkit_face_detection: ^0.13.0
 
 dev_dependencies:
   flutter_test:

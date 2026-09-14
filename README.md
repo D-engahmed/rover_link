@@ -1,111 +1,130 @@
-# rover_link
+# Rover Link — Flutter app
 
-Unified Smart Autonomous Rover control app — the mobile-app half of a single
-Human ↔ AI ↔ Rover interface. The other half is the STM32F401 + ST7735 TFT
-display on the rover itself; both share the same visual language and the
-same underlying state model (mode, mission status, target telemetry).
+One screen, Manual/Follow-Me mode switch (not tabs), global safety strip +
+latching e-stop, collapsible serial console, a Bluetooth connect flow that
+mimics real scan → connect → manage/disconnect behavior, and — new — a
+camera-based "find the person, check their stance, open the door" pipeline
+for Follow Me mode.
 
-## Concept
+## What's verified vs. not
 
-The app is organized around **missions**, not disconnected screens. A
-mission (e.g. `FOLLOW USER`) drives what's shown across Home, Drive, Radar,
-and AI — they're different views of one state machine, not separate tools.
+Written in a sandbox with **no Flutter SDK and no network access to
+pub.dev** — nothing here has been run, `flutter analyze`'d, or compiled.
+Package APIs (`bluetooth_classic`, `camera`, `google_mlkit_face_detection`)
+were checked against published docs/examples via live search, not the
+actual installed packages. Run it and send me whatever `flutter pub get` /
+`flutter run` throws — the likely trouble spots are isolated on purpose:
+`lib/services/real_bt_service.dart` (Bluetooth) and
+`lib/services/vision_service.dart` (camera → ML Kit image conversion, the
+single most version-sensitive part of that file).
 
-Control modes: `MANUAL` → `ASSISTED` → `FOLLOW ME` → `AUTONOMOUS`.
-Safety-critical decisions (obstacle stop) live on the STM32, never the phone
-— the app only visualizes rover-reported state.
+**Already learned the hard way this session:** `bluetooth_classic` failed to
+build because its own Android module is pinned to compileSdk 31 while its
+transitive androidx dependencies now want 34+. If you hit that
+`checkDebugAarMetadata` error again, tell me rather than assuming it's fixed
+— the standard fix is forcing a newer compileSdk on all Android
+subprojects from the root Gradle file, but the exact snippet depends on
+whether your project uses Groovy or Kotlin DSL, and I'd rather confirm that
+than hand you a second unverified guess.
 
-## Structure
-
-```
-lib/
-  main.dart                 // app entry + bottom-nav shell
-  theme/app_theme.dart       // color palette + ThemeData (matches the HTML prototype)
-  models/rover_state.dart    // shared state: mode, mission, target, telemetry
-  widgets/radar_view.dart    // animated radar (CustomPainter): sweep, target, obstacles
-  widgets/metric_tile.dart   // shared card/tile/row building blocks
-  screens/home_screen.dart   // Mission Control — status, radar, mode, mission, e-stop
-  screens/drive_screen.dart  // Manual / Assisted drive pad + speed
-  screens/radar_screen.dart  // Full-screen radar + detection list
-  screens/ai_screen.dart     // Localization, navigation decision, telemetry pipeline
-  screens/settings_screen.dart // Bluetooth device picker + connect/disconnect + parameters
-  services/rover_link_protocol.dart // wire format between phone and STM32 (see below)
-  services/bluetooth_service.dart   // classic-Bluetooth (SPP) connection to the HC-05
-  services/navigation_ai.dart       // signal smoothing + follow-me decision logic
-```
-
-## Connecting to the rover
-
-The HC-05 is a **classic Bluetooth (SPP)** module, not BLE, so the app uses
-`flutter_bluetooth_serial` rather than a BLE package — and this means
-**Android only**: iOS doesn't let third-party apps open the classic SPP
-profile without MFi hardware certification. To support iOS later, the
-rover side would need a BLE module instead (e.g. HM-10, or the STM32's own
-BLE if it has one) — no phone-side fix can work around Apple's restriction.
-
-Flow: pair the HC-05 in the phone's OS-level Bluetooth settings first
-(default PIN is usually `1234` or `0000`), then use Settings → Bluetooth /
-HC-05 in the app to pick it from the paired-devices list and connect.
-
-### Wire protocol (assumed — adjust to match your firmware)
-
-No firmware spec was provided, so `rover_link_protocol.dart` assumes
-newline-delimited JSON, one object per line, in both directions:
+## Setup
 
 ```
-STM32 -> phone (telemetry):
-{"t":"telemetry","tgt_d":4.72,"tgt_b":27,"us_cm":84,"servo":74,"motor":48}
-
-phone -> STM32 (commands):
-{"cmd":"set_mode","mode":"follow_me"}
-{"cmd":"drive","dir":"forward","speed":62}
-{"cmd":"estop"}
-{"cmd":"resume"}
-```
-
-If your firmware already speaks something else, only
-`rover_link_protocol.dart` and `bluetooth_service.dart` need to change —
-nothing else in the app depends on the wire format directly.
-
-### The "AI" (`navigation_ai.dart`)
-
-This is a **rule-based follow-me controller**, not a trained ML model: it
-exponential-smooths the noisy raw distance/bearing readings, derives a
-confidence score from how much they're jittering, and turns that into a
-steering decision (forward / turn / stop / avoid / search) with a
-speed that eases off as the rover nears the follow distance. Obstacle
-avoidance always overrides following. If you want an actual trained model
-later (e.g. calibrating RSSI→distance from real logged readings), this is
-the file to swap — `update()`/`decide()` are the only two methods anything
-else in the app calls.
-
-## Status
-
-Five screens render and are wired to one shared `RoverState`. A live
-HC-05 connection now feeds `RoverState` directly and runs `NavigationAI` on
-the incoming telemetry; when nothing's connected it falls back to a
-simulated telemetry tick so the UI is never dead on screen. Not yet done:
-
-- [ ] Confirm the wire protocol above against your actual STM32 firmware
-      and adjust `rover_link_protocol.dart` if it differs
-- [ ] Android manifest permissions for Bluetooth (see note below)
-- [ ] Matching ST7735 firmware UI on the STM32 side
-- [ ] Persisting mission parameters (follow distance, obstacle threshold)
-      from Settings into `NavigationAI` instead of its hardcoded defaults
-
-**Android permissions**: once `flutter create` generates
-`android/app/src/main/AndroidManifest.xml`, add `BLUETOOTH_CONNECT` (and
-`BLUETOOTH_SCAN` if you add device discovery beyond paired devices) for
-Android 12+, plus the legacy `BLUETOOTH`/`BLUETOOTH_ADMIN` permissions for
-older versions.
-
-## Getting started
-
-This repo currently contains hand-written `lib/` sources and `pubspec.yaml`
-only — no platform folders yet. To run it:
-
-```bash
-flutter create --org com.nxgai --project-name rover_link .   # generates android/ ios/ etc. without touching lib/
+cd rover_link
 flutter pub get
-flutter run
+flutter run   # on a real Android device — emulators lack BT radios and most have no usable camera feed for face detection
 ```
+
+`lib/constants.dart` has `useDemoBluetooth = true` by default, so it runs
+immediately with simulated devices/telemetry, no rover needed. Camera mode
+is independent of that flag — it only asks for camera permission and starts
+the camera when you pick "CAMERA" as the bearing source in Follow Me.
+
+## Android manifest
+
+Add to `android/app/src/main/AndroidManifest.xml` (inside `<manifest>`,
+before `<application>`):
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+
+<!-- Android 11 (API 30) and below -->
+<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+
+<!-- Android 12+ (API 31+) -->
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+```
+
+Double-check `bluetooth_classic`'s own permissions section on pub.dev
+matches this — I only had search snippets of its README, not the full page.
+
+## Why object-type classification (wall/metal/human) isn't in here
+
+Confirmed: you're on a standard HC-SR04-class module, which only exposes
+time-of-flight — no echo waveform, no amplitude data. There's no signal
+there to classify material from. That's a hardware ceiling, not a missing
+feature. Person detection runs off the phone's camera instead
+(`lib/services/vision_service.dart`, Google ML Kit Face Detection), which
+also directly answers "is this person facing the rover" via
+`headEulerAngleY` — your stance signal, built into the same detection call,
+no separate pose model needed for v1.
+
+## Door-open trigger (camera bearing mode only)
+
+`RoverState._maybeOpenDoor()` fires once all three hold:
+1. A face is detected and centered (`bearingFrac` within
+   `centeredBearingThreshold`, default 0.12, of dead center)
+2. `facingCamera` is true (head yaw within `facingYawThresholdDeg`, default
+   20°, of facing the camera straight-on) — this is the stance check
+3. Ultrasonic reads at or below `doorApproachCm` (default 100cm / ~1m)
+
+All three live in `constants.dart` as starting guesses — tune them once you
+can actually test the approach distance and angle you want.
+
+## What's still a placeholder, not a decision I made for you
+
+1. **Drive command bytes** (`cmdForward` etc., single chars `F/L/R/B/S`) —
+   carried over from the HTML mock. Confirm against your STM32 UART parser.
+2. **Door actuator commands** (`cmdDoorOpen`/`cmdDoorClose`) — you confirmed
+   it's a servo on a PWM pin; these strings are stand-ins until you give me
+   the actual angle/command values.
+3. **Telemetry wire format** (`+US:<cm>cm`, `+DIST:<m>m` in
+   `RoverState._onLine`) — invented for the mock. Replace with your real
+   format.
+4. **SPP UUID** — standard HC-05 default; only matters if reconfigured.
+5. **`camera` / `google_mlkit_face_detection` version numbers** in
+   `pubspec.yaml` — couldn't reach pub.dev to confirm exact current
+   versions, only search snippets. `flutter pub get` will tell you
+   immediately if either needs bumping — that's a one-line fix, not a
+   design problem.
+
+## Platform decision made for you, with reasoning
+
+Android only. Classic Bluetooth SPP (what HC-05 speaks) requires Apple MFi
+accessory certification to reach from an iOS app — HC-05 isn't MFi-certified
+and can't be made so. iOS in scope later means a hardware change (a BLE
+module instead of HC-05), not a Flutter package choice.
+
+## Architecture
+
+- `services/bt_service.dart` — `BtService` interface + `DemoBtService`
+  (simulated, no dependency on the Bluetooth plugin at all).
+- `services/real_bt_service.dart` — `RealBtService`, the only file that
+  imports `bluetooth_classic`. Hardware-specific and unverified, isolated
+  from the UI.
+- `services/vision_service.dart` — camera + face detection, isolated the
+  same way, for the same reason.
+- `state/rover_state.dart` — single `ChangeNotifier` holding connection,
+  safety, mode, e-stop, all three bearing sources, door state, and both
+  logs.
+- `screens/home_screen.dart` + `widgets/` — the UI, one screen,
+  mode-switched body, no tab navigation.
+
+## Backend
+
+Lives separately in `rover_backend/` (own zip) — logging + model
+versioning/serving, deliberately **not** in the real-time control path. See
+its own README for why.

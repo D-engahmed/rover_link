@@ -1,4 +1,4 @@
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
 import 'package:flutter/material.dart';
 import '../models/rover_state.dart';
 import '../theme/app_theme.dart';
@@ -21,7 +21,7 @@ class SettingsScreen extends StatelessWidget {
       );
       return;
     }
-    final chosen = await showModalBottomSheet<BluetoothDevice>(
+    final chosen = await showModalBottomSheet<BtcDevice>(
       context: context,
       backgroundColor: RoverColors.panel,
       builder: (ctx) => SafeArea(
@@ -34,7 +34,7 @@ class SettingsScreen extends StatelessWidget {
             ),
             for (final d in devices)
               ListTile(
-                title: Text(d.name ?? 'Unknown device'),
+                title: Text(d.displayName),
                 subtitle: Text(d.address),
                 onTap: () => Navigator.pop(ctx, d),
               ),
@@ -47,7 +47,10 @@ class SettingsScreen extends StatelessWidget {
       onChanged();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(ok ? 'Connected to ${chosen.name}' : 'Could not connect — is the HC-05 powered on?')),
+          SnackBar(
+              content: Text(ok
+                  ? 'Connected to ${chosen.displayName}'
+                  : 'Could not connect — is the HC-05 powered on?')),
         );
       }
     }

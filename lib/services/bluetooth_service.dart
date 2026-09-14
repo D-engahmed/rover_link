@@ -1,25 +1,27 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
 import 'rover_link_protocol.dart';
 
 enum RoverLinkStatus { disconnected, scanning, connecting, connected, error }
 
-/// Owns the classic-Bluetooth (SPP) connection to the HC-05 module.
+/// Owns the Bluetooth Classic (RFCOMM/SPP) connection to the HC-05 module.
 ///
-/// Android only: the HC-05 is a classic-Bluetooth serial module, and iOS
-/// does not allow third-party apps to open the classic SPP profile (Apple
-/// requires MFi hardware certification for that). If you need this app to
-/// run on iOS, the rover-side fix is to swap the HC-05 for a BLE module
-/// (e.g. HM-10, or the STM32's own BLE if it has one) — the phone-side fix
-/// alone can't work around Apple's restriction.
+/// Uses `flutter_classic_bluetooth` — actively maintained and built against
+/// current Android tooling (AGP/Kotlin), unlike the older
+/// `flutter_bluetooth_serial`, which no longer builds on recent Flutter/AGP
+/// versions.
+///
+/// Full functionality on Android, Windows, macOS, Linux. On iOS, Bluetooth
+/// Classic is restricted to MFi-certified accessories, so a plain HC-05
+/// can't be reached from this app on iOS — the rover side would need a BLE
+/// module instead (e.g. HM-10) to support iOS.
 class RoverConnection {
-  RoverConnection();
+  RoverConnection() : _bt = FlutterClassicBluetooth();
 
-  final _bt = FlutterBluetoothSerial.instance;
-  BluetoothConnection? _connection;
-  StreamSubscription<Uint8ListLike>? _sub;
-  final StringBuffer _incomingBuffer = StringBuffer();
+  final FlutterClassicBluetooth _bt;
+  BtcLink? _link;
+  StreamSubscription? _stateSub;
+  StreamSubscription<String>? _lineSub;
 
   final _statusController = StreamController<RoverLinkStatus>.broadcast();
   final _telemetryController = StreamController<RoverPacket>.broadcast();
@@ -35,27 +37,49 @@ class RoverConnection {
     _statusController.add(s);
   }
 
-  /// Returns previously-paired devices. The user must pair the HC-05 in the
-  /// phone's Bluetooth settings first (default HC-05 PIN is usually 1234 or
-  /// 0000) — this app only lists and connects, it doesn't do OS-level pairing.
-  Future<List<BluetoothDevice>> pairedDevices() async {
+  /// Devices already paired at the OS level. Pair the HC-05 in the phone's
+  /// Bluetooth settings first (default PIN is usually 1234 or 0000) — this
+  /// only lists/connects, it doesn't do OS-level pairing.
+  Future<List<BtcDevice>> pairedDevices() async {
     try {
-      return await _bt.getBondedDevices();
+      return await _bt.getPairedDevices();
     } catch (_) {
       return const [];
     }
   }
 
-  Future<bool> connect(BluetoothDevice device) async {
+  /// Connects with auto-reconnect (exponential backoff) since a robot link
+  /// over classic Bluetooth is exactly the "long-lived link to a flaky
+  /// device" case the package's `connectWithReconnect` is meant for.
+  Future<bool> connect(BtcDevice device) async {
     _setStatus(RoverLinkStatus.connecting);
+    await _teardown();
     try {
-      _connection = await BluetoothConnection.toAddress(device.address);
-      _setStatus(RoverLinkStatus.connected);
-      _sub = _connection!.input?.listen(
-        _onData,
-        onDone: () => _setStatus(RoverLinkStatus.disconnected),
-        onError: (_) => _setStatus(RoverLinkStatus.error),
+      final link = _bt.connectWithReconnect(
+        address: device.address,
+        policy: const BtcReconnectPolicy(
+          initialBackoff: Duration(seconds: 1),
+          maxBackoff: Duration(seconds: 15),
+        ),
       );
+      _link = link;
+      _stateSub = link.state.listen((s) {
+        final name = s.name.toLowerCase();
+        if (name == 'connected') {
+          _setStatus(RoverLinkStatus.connected);
+        } else if (name.contains('connecting')) {
+          // covers both "connecting" and "reconnecting"
+          _setStatus(RoverLinkStatus.connecting);
+        } else if (name.contains('disconnect')) {
+          _setStatus(RoverLinkStatus.disconnected);
+        } else {
+          _setStatus(RoverLinkStatus.error);
+        }
+      });
+      _lineSub = link.input.lines().listen((line) {
+        final packet = RoverPacket.tryParse(line);
+        if (packet != null) _telemetryController.add(packet);
+      });
       return true;
     } catch (_) {
       _setStatus(RoverLinkStatus.error);
@@ -63,44 +87,30 @@ class RoverConnection {
     }
   }
 
-  void _onData(dynamic data) {
-    // flutter_bluetooth_serial delivers raw bytes; decode and split on
-    // newlines since the protocol is newline-delimited JSON.
-    final chunk = utf8.decode(data as List<int>, allowMalformed: true);
-    _incomingBuffer.write(chunk);
-    final combined = _incomingBuffer.toString();
-    final lines = combined.split('\n');
-    // Keep the last (possibly incomplete) fragment buffered.
-    _incomingBuffer
-      ..clear()
-      ..write(lines.removeLast());
-    for (final line in lines) {
-      final packet = RoverPacket.tryParse(line);
-      if (packet != null) _telemetryController.add(packet);
-    }
+  void sendCommand(String cmd, [Map<String, dynamic> extra = const {}]) {
+    final link = _link;
+    if (link == null || !link.isConnected) return;
+    link.sendString(RoverPacket.encodeCommand(cmd, extra));
   }
 
-  void sendCommand(String cmd, [Map<String, dynamic> extra = const {}]) {
-    final conn = _connection;
-    if (conn == null || !(conn.isConnected)) return;
-    conn.output.add(utf8.encode(RoverPacket.encodeCommand(cmd, extra)));
+  Future<void> _teardown() async {
+    await _stateSub?.cancel();
+    await _lineSub?.cancel();
+    _stateSub = null;
+    _lineSub = null;
   }
 
   Future<void> disconnect() async {
-    await _sub?.cancel();
-    await _connection?.finish();
-    _connection = null;
+    await _teardown();
+    await _link?.close();
+    _link = null;
     _setStatus(RoverLinkStatus.disconnected);
   }
 
   void dispose() {
-    _sub?.cancel();
-    _connection?.dispose();
+    _teardown();
+    _link?.close();
     _statusController.close();
     _telemetryController.close();
   }
 }
-
-/// Small alias so this file doesn't hard-depend on the exact type
-/// flutter_bluetooth_serial's `input` stream emits across versions.
-typedef Uint8ListLike = List<int>;
