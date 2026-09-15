@@ -1,0 +1,22 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"RoverControlSample",
+  "type":"object",
+  "required":["timestamp_ms","session_id","action"],
+  "properties":{
+    "timestamp_ms":{"type":"integer","minimum":0},
+    "session_id":{"type":"string"},
+    "front_distance_cm":{"type":["number","null"]},
+    "left_distance_cm":{"type":["number","null"]},
+    "right_distance_cm":{"type":["number","null"]},
+    "target_distance_cm":{"type":["number","null"]},
+    "target_angle_deg":{"type":["number","null"]},
+    "speed_cm_s":{"type":["number","null"]},
+    "rssi_dbm":{"type":["number","null"]},
+    "previous_action":{"type":["string","null"]},
+    "controller":{"type":"string"},
+    "action":{"enum":["STOP","FORWARD","LEFT","RIGHT","REVERSE"]},
+    "human_override":{"type":"boolean"},
+    "notes":{"type":"string"}
+  }
+}
