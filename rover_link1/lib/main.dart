@@ -1,6 +1,6 @@
-import 'screens/welcome_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'screens/splash_screen.dart';
 import 'screens/drive_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/radar_screen.dart';
@@ -66,7 +66,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => WelcomeScreen(onFinished: _openHome);
+  Widget build(BuildContext context) {
+    return SplashScreen(onFinished: _openHome);
+  }
 }
 
 class MainNavigationScreen extends StatefulWidget {
@@ -101,7 +103,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _onNavTap(int index) {
-    if (index >= 0 && index <= 4) {
+    if (index >= 0 && index <= 4 && index != _currentIndex) {
       setState(() => _currentIndex = index);
     }
   }
