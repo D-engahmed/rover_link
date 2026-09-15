@@ -38,11 +38,13 @@ class RoverAutonomyService {
     _busy = true;
     try {
       final action = await baseline.step(state);
-      await dataset.record(
-        telemetry: state,
-        action: action,
-        controller: 'baseline_v1',
-      );
+      if (action != null) {
+        await dataset.record(
+          telemetry: state,
+          action: action,
+          controller: 'baseline_v1',
+        );
+      }
     } finally {
       _busy = false;
     }
