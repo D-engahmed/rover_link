@@ -1,0 +1,11 @@
+src/NVIC_program.o: ../src/NVIC_program.c ../include/LIB/STD_TYPES.h \
+ ../include/LIB/UTILS.h ../include/MCAL/NVIC/NVIC_private.h \
+ ../include/MCAL/NVIC/NVIC_interface.h
+
+../include/LIB/STD_TYPES.h:
+
+../include/LIB/UTILS.h:
+
+../include/MCAL/NVIC/NVIC_private.h:
+
+../include/MCAL/NVIC/NVIC_interface.h:
