@@ -1,0 +1,9 @@
+# ML local artifacts
+ml/.venv/
+ml/**/__pycache__/
+ml/data/raw/*.jsonl
+ml/data/labeled/*.jsonl
+ml/data/splits/*
+ml/models/*
+!ml/models/.gitkeep
+ml/evaluation/*.json
