@@ -9,12 +9,12 @@ import 'screens/settings_screen.dart';
 import 'theme/rover_colors.dart';
 import 'services/bluetooth_service.dart';
 import 'services/rover_command_service.dart';
-
+import 'services/rover_telemetry_service.dart';
+import 'services/rover_dataset_service.dart';
+import 'services/rover_autonomy_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Set system status bar and navigation bar styling to match dark theme
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -23,11 +23,10 @@ void main() {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
-
   runApp(const RoverApp());
 }
 
- class RoverApp extends StatelessWidget {
+class RoverApp extends StatelessWidget {
   const RoverApp({super.key});
 
   @override
@@ -51,6 +50,7 @@ void main() {
     );
   }
 }
+
 class AppStartScreen extends StatefulWidget {
   const AppStartScreen({super.key});
 
@@ -59,30 +59,20 @@ class AppStartScreen extends StatefulWidget {
 }
 
 class _AppStartScreenState extends State<AppStartScreen> {
-    
   void _openHome() {
-  Navigator.of(context).pushReplacement(
-    MaterialPageRoute(
-      builder: (_) => const MainNavigationScreen(),
-    ),
-  );
-}
-  @override
-  Widget build(BuildContext context) {
-     return WelcomeScreen(
-      onFinished: _openHome,
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
     );
   }
+
+  @override
+  Widget build(BuildContext context) => WelcomeScreen(onFinished: _openHome);
 }
 
- /// Shared navigation shell managing Home (0) and Radar (2)
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
 
-  const MainNavigationScreen({
-    super.key,
-    this.initialIndex = 0,
-  });
+  const MainNavigationScreen({super.key, this.initialIndex = 0});
 
   @override
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
@@ -91,42 +81,28 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final BluetoothService bluetoothService = BluetoothService();
   late final RoverCommandService roverCommandService;
-
+  late final RoverTelemetryService roverTelemetryService;
+  late final RoverDatasetService roverDatasetService;
+  late final RoverAutonomyService roverAutonomyService;
   late int _currentIndex;
 
   @override
   void initState() {
     super.initState();
-
     _currentIndex = widget.initialIndex;
-
-    roverCommandService = RoverCommandService(
-      bluetoothService,
+    roverCommandService = RoverCommandService(bluetoothService);
+    roverTelemetryService = RoverTelemetryService(bluetoothService);
+    roverDatasetService = RoverDatasetService();
+    roverAutonomyService = RoverAutonomyService(
+      telemetryService: roverTelemetryService,
+      commands: roverCommandService,
+      dataset: roverDatasetService,
     );
   }
 
   void _onNavTap(int index) {
-    if (index == 0 ||
-        index == 1 ||
-        index == 2 ||
-        index == 3 ||
-        index == 4) {
-      setState(() {
-        _currentIndex = index;
-      });
-    } else {
-      final names = ['Home', 'Drive', 'Radar', 'AI', 'Settings'];
-
-      ScaffoldMessenger.of(context).removeCurrentSnackBar();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${names[index]} screen coming soon'),
-          duration: const Duration(seconds: 1),
-          backgroundColor: RoverColors.cardBackground,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    if (index >= 0 && index <= 4) {
+      setState(() => _currentIndex = index);
     }
   }
 
@@ -134,21 +110,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Widget build(BuildContext context) {
     return IndexedStack(
       index: _currentIndex,
-     children: [
-  HomeScreen(onNavTap: _onNavTap),
-
-  DriveScreen(
-    onNavTap: _onNavTap,
-    roverCommandService: roverCommandService,
-  ),
-
-  RadarScreen(onNavTap: _onNavTap),
-  AiScreen(onNavTap: _onNavTap),
-  SettingsScreen(
-  onNavTap: _onNavTap,
-  bluetoothService: bluetoothService,
-),
-],  
+      children: [
+        HomeScreen(onNavTap: _onNavTap),
+        DriveScreen(
+          onNavTap: _onNavTap,
+          roverCommandService: roverCommandService,
+        ),
+        RadarScreen(onNavTap: _onNavTap),
+        AiScreen(onNavTap: _onNavTap),
+        SettingsScreen(
+          onNavTap: _onNavTap,
+          bluetoothService: bluetoothService,
+          onConnected: roverAutonomyService.startBaseline,
+        ),
+      ],
     );
+  }
+
+  @override
+  void dispose() {
+    roverAutonomyService.stop();
+    roverTelemetryService.dispose();
+    super.dispose();
   }
 }
