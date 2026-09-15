@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RoverInference",
+  "type": "object",
+  "required": ["model_version", "target_type", "confidence"],
+  "properties": {
+    "model_version": {"type": "string"},
+    "target_type": {"enum": ["unknown", "human", "vehicle", "obstacle"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "bearing_deg": {"type": ["number", "null"]},
+    "range_cm": {"type": ["number", "null"], "minimum": 0}
+  }
+}
