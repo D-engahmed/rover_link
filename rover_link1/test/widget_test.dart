@@ -5,41 +5,38 @@ import 'package:rover_link1/widgets/radar_scope.dart';
 
 void main() {
   testWidgets('Multi-screen navigation test: Home -> Drive -> Radar -> Home', (WidgetTester tester) async {
-    // Build RoverApp and trigger a frame
     await tester.pumpWidget(const RoverApp());
 
-    // 1. Verify Home Screen loads initially
+    // AppStartScreen intentionally shows a lightweight 1.05s visual splash.
+    // The previous test asserted Home immediately after pumpWidget(), so it
+    // was actually testing the splash screen and failed on the Home branding.
+    await tester.pump(const Duration(milliseconds: 1100));
+    await tester.pumpAndSettle();
+
+    // Home Screen loads after the splash.
     expect(find.text('SMART ROVER'), findsOneWidget);
     expect(find.text('LIVE ENVIRONMENT'), findsOneWidget);
     expect(find.text('MISSION'), findsOneWidget);
 
-    // 2. Navigate to DRIVE screen by tapping "Drive"
+    // Navigate to DRIVE.
     await tester.tap(find.text('Drive').first);
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    // Verify DRIVE screen elements
     expect(find.text('MANUAL DRIVE'), findsOneWidget);
     expect(find.text('DIRECT MOTOR CONTROL'), findsOneWidget);
     expect(find.text('READY'), findsOneWidget);
-
-    // D-Pad controls & STOP button
     expect(find.text('STOP'), findsOneWidget);
-
-    // Speed panel
     expect(find.text('SPEED'), findsOneWidget);
     expect(find.byType(Slider), findsOneWidget);
-
-    // Obstacle and Ultrasonic panels
     expect(find.text('OBSTACLE'), findsOneWidget);
     expect(find.text('CLEAR'), findsOneWidget);
     expect(find.text('ULTRASONIC'), findsOneWidget);
     expect(find.text('167 cm'), findsOneWidget);
 
-    // 3. Navigate from Drive to LIVE RADAR screen by tapping "Radar"
+    // Navigate to LIVE RADAR.
     await tester.tap(find.text('Radar').first);
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    // Verify LIVE RADAR screen is displayed
     expect(find.text('LIVE RADAR'), findsOneWidget);
     expect(find.text('AUTONOMOUS ROVER SYSTEM'), findsOneWidget);
     expect(find.text('NEAREST OBSTACLE'), findsOneWidget);
@@ -50,18 +47,16 @@ void main() {
     expect(find.text('Obstacle 1'), findsOneWidget);
     expect(find.text('Obstacle 2'), findsOneWidget);
 
-    // 4. Navigate back to HOME screen by tapping "Home"
+    // Return to HOME.
     await tester.tap(find.text('Home').first);
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    // Verify Home screen is visible again
     expect(find.text('SMART ROVER'), findsOneWidget);
     expect(find.text('LIVE ENVIRONMENT'), findsOneWidget);
     expect(find.text('MISSION'), findsOneWidget);
   });
 
   testWidgets('RadarScope layout does not crash with zero or narrow constraints', (WidgetTester tester) async {
-    // Test with 0-width constraint
     await tester.pumpWidget(
       const Directionality(
         textDirection: TextDirection.ltr,
