@@ -27,7 +27,7 @@ u8 ROVER_PROTOCOL_Encode(const RoverPacket_t *packet, u8 *out, u16 out_capacity)
     if (packet == 0 || out == 0 || packet->length > ROVER_PROTOCOL_MAX_PAYLOAD)
         return 0U;
 
-    required = (u16)(6U + packet->length);
+    required = (u16)(7U + packet->length); /* SOF + 4 header bytes + payload + 2 CRC */
     if (out_capacity < required) return 0U;
 
     out[0] = ROVER_PROTOCOL_SOF;
@@ -39,7 +39,7 @@ u8 ROVER_PROTOCOL_Encode(const RoverPacket_t *packet, u8 *out, u16 out_capacity)
 
     crc = ROVER_PROTOCOL_Crc16(&out[1], (u16)(4U + packet->length));
     out[5U + packet->length] = (u8)(crc & 0xFFU);
-    out[6U + packet->length - 1U] = (u8)(crc >> 8U);
+    out[6U + packet->length] = (u8)(crc >> 8U);
 
     return (u8)required;
 }
