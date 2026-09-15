@@ -10,6 +10,7 @@ class BaselineNavigationService {
   final RoverCommandService commands;
   double _leftClearanceCm = 0;
   double _rightClearanceCm = 0;
+  String _lastAction = 'STOP';
   bool _centerDecisionPending = false;
 
   BaselineNavigationService(this.commands);
@@ -35,11 +36,15 @@ class BaselineNavigationService {
       _rightClearanceCm = _rightClearanceCm == 0 ? distance : (_rightClearanceCm * .7 + distance * .3);
     }
 
-    if (angle < centerMinDeg || angle > centerMaxDeg || _centerDecisionPending) return null;
-    _centerDecisionPending = true;
+    if (angle >= centerMinDeg && angle <= centerMaxDeg && !_centerDecisionPending) {
+      _centerDecisionPending = true;
+      _lastAction = decide(state);
+      Future<void>.delayed(const Duration(milliseconds: 180), () {
+        _centerDecisionPending = false;
+      });
+    }
 
-    final action = decide(state);
-    switch (action) {
+    switch (_lastAction) {
       case 'FORWARD':
         await commands.moveForward();
         break;
@@ -52,10 +57,6 @@ class BaselineNavigationService {
       default:
         await commands.stop();
     }
-
-    Future<void>.delayed(const Duration(milliseconds: 180), () {
-      _centerDecisionPending = false;
-    });
-    return action;
+    return _lastAction;
   }
 }
