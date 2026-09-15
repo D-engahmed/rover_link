@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
@@ -45,24 +46,11 @@ class RoverDatasetService {
       'notes': notes,
     };
 
-    final file = await _file();
-    await file.writeAsString('${jsonEncode(row)}\n', mode: FileMode.append, flush: true);
+    await File(_filePath!).writeAsString(
+      '${jsonEncode(row)}\n',
+      mode: FileMode.append,
+      flush: true,
+    );
     _previousAction = action;
-  }
-
-  Future<dynamic> _file() async {
-    // Dynamic keeps this service independent from the concrete File type in callers.
-    final directory = await getApplicationDocumentsDirectory();
-    final path = _filePath ?? '${directory.path}/${_sessionId ?? 'session'}.jsonl';
-    // Importing dart:io only here keeps the public API focused on dataset operations.
-    return _FileProxy(path);
-  }
-}
-
-class _FileProxy {
-  final String path;
-  _FileProxy(this.path);
-  Future<void> writeAsString(String value, {required dynamic mode, bool flush = false}) async {
-    // Implemented in the platform adapter in the next integration step.
   }
 }
