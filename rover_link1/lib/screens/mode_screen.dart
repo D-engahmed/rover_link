@@ -53,7 +53,7 @@ class _ModeScreenState extends State<ModeScreen> {
         RoverMode.manual => 'Human chooses every movement. No AI navigation.',
         RoverMode.assisted => 'Human drives. The phone blocks unsafe forward movement when an obstacle is too close.',
         RoverMode.autonomous => 'The phone-side navigation policy chooses movement from live radar telemetry.',
-        RoverMode.followMe => 'Experimental target tracking. No camera is used; the app waits for target telemetry.',
+        RoverMode.followMe => 'Phone-side target tracking drives toward a reported target while maintaining distance.',
         RoverMode.emergencyStop => 'Stop all movement.',
       };
 
@@ -83,23 +83,16 @@ class _ModeScreenState extends State<ModeScreen> {
       await fn();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _assisted(
-    Future<void> Function() fn,
-    String action,
-  ) async {
+  Future<void> _assisted(Future<void> Function() fn, String action) async {
     final d = _latest?.frontDistanceCm;
-    if (action == 'FORWARD' &&
-        d != null &&
-        d <= RoverAiService.obstacleCm) {
+    if (action == 'FORWARD' && d != null && d <= RoverAiService.obstacleCm) {
       await _send(() => widget.commandService.stop(source: CommandSource.safety));
       return;
     }
@@ -117,9 +110,7 @@ class _ModeScreenState extends State<ModeScreen> {
     }
 
     if (widget.mode == RoverMode.manual) {
-      // The STM32 has an explicit mode command. Navigation alone must not
-      // change the rover mode because that leaves the firmware in autonomy.
-      await _send(() => widget.commandService.manualMode());
+      await _send(() => widget.commandService.enterManualMode());
       if (mounted) setState(() => _active = true);
       widget.onNavTap?.call(1);
       return;
@@ -130,7 +121,10 @@ class _ModeScreenState extends State<ModeScreen> {
     } else if (widget.mode == RoverMode.assisted) {
       await _send(() => widget.commandService.manualMode());
     } else if (widget.mode == RoverMode.followMe) {
-      setState(() => _active = true);
+      await _send(() => widget.aiService.startFollow());
+    } else if (widget.mode == RoverMode.emergencyStop) {
+      await _send(() => widget.aiService.stop());
+      return;
     }
 
     if (mounted) setState(() => _active = true);
@@ -148,28 +142,19 @@ class _ModeScreenState extends State<ModeScreen> {
   Widget build(BuildContext context) {
     final distance = _latest?.frontDistanceCm;
     final aiRunning = widget.aiService.state == AiRunState.running;
+    final following = widget.aiService.state == AiRunState.following;
 
     return Scaffold(
       backgroundColor: RoverColors.background,
       appBar: AppBar(
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1,
-          ),
-        ),
+        title: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 1)),
         actions: [
           IconButton(
             tooltip: 'Command monitor',
             icon: const Icon(Icons.receipt_long_rounded),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) => CommandMonitorScreen(
-                  commandService: widget.commandService,
-                  onNavTap: widget.onNavTap,
-                ),
+                builder: (_) => CommandMonitorScreen(commandService: widget.commandService, onNavTap: widget.onNavTap),
               ),
             ),
           ),
@@ -183,90 +168,34 @@ class _ModeScreenState extends State<ModeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
-                  Text(
-                    description,
-                    style: const TextStyle(
-                      color: RoverColors.textSecondary,
-                      fontSize: 12,
-                      height: 1.45,
-                    ),
-                  ),
+                  Text(description, style: const TextStyle(color: RoverColors.textSecondary, fontSize: 12, height: 1.45)),
                   const SizedBox(height: 12),
-                  _row(
-                    'Bluetooth',
-                    widget.bluetoothService.isReady ? 'READY' : 'DISCONNECTED',
-                    widget.bluetoothService.isReady,
-                  ),
-                  _row(
-                    'Front obstacle',
-                    distance == null ? '--' : '${distance.toStringAsFixed(0)} cm',
-                    distance == null || distance > RoverAiService.obstacleCm,
-                  ),
-                  _row(
-                    'Last TX',
-                    _lastTrace == null
-                        ? '--'
-                        : '${_lastTrace!.action} / ${_lastTrace!.stageLabel}',
-                    _lastTrace?.stage == CommandStage.sent,
-                  ),
+                  _row('Bluetooth', widget.bluetoothService.isReady ? 'READY' : 'DISCONNECTED', widget.bluetoothService.isReady),
+                  _row('Front obstacle', distance == null ? '--' : '${distance.toStringAsFixed(0)} cm', distance == null || distance > RoverAiService.obstacleCm),
+                  _row('Last TX', _lastTrace == null ? '--' : '${_lastTrace!.action} / ${_lastTrace!.stageLabel}', _lastTrace?.stage == CommandStage.sent),
                 ],
               ),
             ),
             const SizedBox(height: 14),
-            if (widget.mode == RoverMode.manual || widget.mode == RoverMode.assisted)
-              _drivePad(),
+            if (widget.mode == RoverMode.manual || widget.mode == RoverMode.assisted) _drivePad(),
             if (widget.mode == RoverMode.autonomous) _aiPanel(aiRunning),
-            if (widget.mode == RoverMode.followMe) _followPanel(),
+            if (widget.mode == RoverMode.followMe) _followPanel(following),
             const SizedBox(height: 14),
             _card(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'COMMAND PIPELINE',
-                    style: TextStyle(
-                      color: RoverColors.textMuted,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
+                  const Text('COMMAND PIPELINE', style: TextStyle(color: RoverColors.textMuted, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
                   const SizedBox(height: 10),
-                  const Text(
-                    'source → safety → Bluetooth TX → STM32',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  const Text('source → safety → Bluetooth TX → STM32', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
-                  const Text(
-                    'SENT means the Bluetooth write succeeded. STM32 execution is confirmed by the firmware ACK.',
-                    style: TextStyle(
-                      color: RoverColors.textMuted,
-                      fontSize: 10,
-                      height: 1.4,
-                    ),
-                  ),
+                  const Text('SENT means the Bluetooth write succeeded. STM32 execution is confirmed by the firmware ACK.', style: TextStyle(color: RoverColors.textMuted, fontSize: 10, height: 1.4)),
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
                     onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => CommandMonitorScreen(
-                          commandService: widget.commandService,
-                          onNavTap: widget.onNavTap,
-                        ),
-                      ),
+                      MaterialPageRoute(builder: (_) => CommandMonitorScreen(commandService: widget.commandService, onNavTap: widget.onNavTap)),
                     ),
                     icon: const Icon(Icons.receipt_long_rounded),
                     label: const Text('OPEN COMMAND MONITOR'),
@@ -277,75 +206,32 @@ class _ModeScreenState extends State<ModeScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: RoverBottomNav(
-        currentIndex: 0,
-        onTap: widget.onNavTap,
-      ),
+      bottomNavigationBar: RoverBottomNav(currentIndex: 0, onTap: widget.onNavTap),
     );
   }
 
   Widget _drivePad() => _card(
         child: Column(
           children: [
-            Text(
-              widget.mode == RoverMode.assisted
-                  ? 'HUMAN INPUT + SAFETY FILTER'
-                  : 'MANUAL DRIVER',
-              style: const TextStyle(
-                color: RoverColors.textMuted,
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1.1,
-              ),
-            ),
+            Text(widget.mode == RoverMode.assisted ? 'HUMAN INPUT + SAFETY FILTER' : 'MANUAL DRIVER', style: const TextStyle(color: RoverColors.textMuted, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.1)),
             const SizedBox(height: 14),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _btn(
-                  'LEFT',
-                  Icons.chevron_left,
-                  () => widget.mode == RoverMode.assisted
-                      ? _assisted(() => widget.commandService.turnLeft(), 'LEFT')
-                      : _send(() => widget.commandService.turnLeft()),
-                ),
+                _btn('LEFT', Icons.chevron_left, () => widget.mode == RoverMode.assisted ? _assisted(() => widget.commandService.turnLeft(), 'LEFT') : _send(() => widget.commandService.turnLeft())),
                 const SizedBox(width: 9),
-                _btn(
-                  'STOP',
-                  Icons.stop_rounded,
-                  () => _send(() => widget.commandService.stop()),
-                  danger: true,
-                ),
+                _btn('STOP', Icons.stop_rounded, () => _send(() => widget.commandService.stop()), danger: true),
                 const SizedBox(width: 9),
-                _btn(
-                  'RIGHT',
-                  Icons.chevron_right,
-                  () => widget.mode == RoverMode.assisted
-                      ? _assisted(() => widget.commandService.turnRight(), 'RIGHT')
-                      : _send(() => widget.commandService.turnRight()),
-                ),
+                _btn('RIGHT', Icons.chevron_right, () => widget.mode == RoverMode.assisted ? _assisted(() => widget.commandService.turnRight(), 'RIGHT') : _send(() => widget.commandService.turnRight())),
               ],
             ),
             const SizedBox(height: 9),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _btn(
-                  'BACK',
-                  Icons.keyboard_arrow_down,
-                  () => _send(() => widget.commandService.moveBackward()),
-                ),
+                _btn('BACK', Icons.keyboard_arrow_down, () => _send(() => widget.commandService.moveBackward())),
                 const SizedBox(width: 9),
-                _btn(
-                  'FORWARD',
-                  Icons.keyboard_arrow_up,
-                  () => widget.mode == RoverMode.assisted
-                      ? _assisted(
-                          () => widget.commandService.moveForward(),
-                          'FORWARD',
-                        )
-                      : _send(() => widget.commandService.moveForward()),
-                ),
+                _btn('FORWARD', Icons.keyboard_arrow_up, () => widget.mode == RoverMode.assisted ? _assisted(() => widget.commandService.moveForward(), 'FORWARD') : _send(() => widget.commandService.moveForward())),
               ],
             ),
           ],
@@ -356,93 +242,56 @@ class _ModeScreenState extends State<ModeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'AI NAVIGATION',
-              style: TextStyle(
-                color: RoverColors.textMuted,
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1.1,
-              ),
-            ),
+            const Text('AI NAVIGATION', style: TextStyle(color: RoverColors.textMuted, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.1)),
             const SizedBox(height: 10),
-            Text(
-              running
-                  ? 'AI is selecting movement from live radar telemetry.'
-                  : 'AI is stopped.',
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
+            Text(running ? 'AI is selecting movement from live radar telemetry.' : 'AI is stopped.', style: const TextStyle(color: Colors.white, fontSize: 13)),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: _busy ? null : (running ? _stop : _activate),
                 icon: Icon(running ? Icons.stop : Icons.smart_toy_rounded),
-                label: Text(
-                  running ? 'STOP AUTONOMOUS' : 'START AUTONOMOUS',
-                ),
+                label: Text(running ? 'STOP AUTONOMOUS' : 'START AUTONOMOUS'),
               ),
             ),
           ],
         ),
       );
 
-  Widget _followPanel() {
+  Widget _followPanel(bool running) {
     final d = _latest?.targetDistanceCm;
     final a = _latest?.targetAngleDeg;
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'TARGET ACQUISITION',
-            style: TextStyle(
-              color: RoverColors.textMuted,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.1,
-            ),
-          ),
+          const Text('TARGET ACQUISITION', style: TextStyle(color: RoverColors.textMuted, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.1)),
           const SizedBox(height: 10),
           _row('Target distance', d == null ? 'WAITING' : '${d.toStringAsFixed(0)} cm', d != null),
           _row('Target angle', a == null ? 'WAITING' : '${a.toStringAsFixed(0)}°', a != null),
-          _row('Follow state', _active ? 'ARMED' : 'STOPPED', _active),
+          _row('Follow state', running ? 'RUNNING' : 'STOPPED', running),
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _busy ? null : (_active ? _stop : _activate),
-              icon: Icon(_active ? Icons.stop : Icons.person_search_rounded),
-              label: Text(_active ? 'STOP FOLLOW ME' : 'ARM FOLLOW ME'),
+              onPressed: _busy ? null : (running ? _stop : _activate),
+              icon: Icon(running ? Icons.stop : Icons.person_search_rounded),
+              label: Text(running ? 'STOP FOLLOW ME' : 'START FOLLOW ME'),
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'No camera is used. Human identity classification is not claimed from a single HC-SR04 reading.',
-            style: TextStyle(
-              color: RoverColors.textMuted,
-              fontSize: 10,
-              height: 1.4,
-            ),
-          ),
+          const Text('Follow-me requires target_distance_cm and target_angle_deg telemetry. The radar sweep angle alone is not treated as a person target.', style: TextStyle(color: RoverColors.textMuted, fontSize: 10, height: 1.4)),
         ],
       ),
     );
   }
 
-  Widget _btn(
-    String label,
-    IconData icon,
-    VoidCallback fn, {
-    bool danger = false,
-  }) => SizedBox(
+  Widget _btn(String label, IconData icon, VoidCallback fn, {bool danger = false}) => SizedBox(
         width: 88,
         child: ElevatedButton(
           onPressed: _busy ? null : fn,
           style: ElevatedButton.styleFrom(
-            backgroundColor: danger
-                ? RoverColors.obstacleRed.withValues(alpha: .18)
-                : RoverColors.cardHighlight,
+            backgroundColor: danger ? RoverColors.obstacleRed.withValues(alpha: .18) : RoverColors.cardHighlight,
             foregroundColor: danger ? RoverColors.obstacleRed : Colors.white,
             padding: const EdgeInsets.symmetric(vertical: 12),
           ),
@@ -450,13 +299,7 @@ class _ModeScreenState extends State<ModeScreen> {
             children: [
               Icon(icon, size: 22),
               const SizedBox(height: 2),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
+              Text(label, style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w900)),
             ],
           ),
         ),
@@ -465,11 +308,7 @@ class _ModeScreenState extends State<ModeScreen> {
   Widget _card({required Widget child}) => Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: RoverColors.cardBackground,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: RoverColors.cardBorder),
-        ),
+        decoration: BoxDecoration(color: RoverColors.cardBackground, borderRadius: BorderRadius.circular(18), border: Border.all(color: RoverColors.cardBorder)),
         child: child,
       );
 
@@ -477,23 +316,8 @@ class _ModeScreenState extends State<ModeScreen> {
         padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: RoverColors.textMuted,
-                  fontSize: 11,
-                ),
-              ),
-            ),
-            Text(
-              value,
-              style: TextStyle(
-                color: good ? RoverColors.radarGreen : RoverColors.obstacleRed,
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
+            Expanded(child: Text(label, style: const TextStyle(color: RoverColors.textMuted, fontSize: 11))),
+            Text(value, style: TextStyle(color: good ? RoverColors.radarGreen : RoverColors.obstacleRed, fontSize: 11, fontWeight: FontWeight.w900)),
           ],
         ),
       );
