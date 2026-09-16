@@ -40,16 +40,13 @@ class RoverAiService {
   final RoverTelemetryService telemetryService;
   final RoverCommandService commands;
   StreamSubscription<RoverTelemetry>? _subscription;
-  final StreamController<AiDecision> _decisions =
-      StreamController<AiDecision>.broadcast();
+  final StreamController<AiDecision> _decisions = StreamController<AiDecision>.broadcast();
 
   AiRunState _state = AiRunState.stopped;
   AiDecision? _lastDecision;
   bool _busy = false;
+  Completer<void>? _inFlight;
 
-  // The STM32 has one HC-SR04 mounted on a sweeping servo. Therefore a single
-  // telemetry packet is NOT three simultaneous front/left/right sensors.
-  // These values are accumulated from the radar sweep on the phone.
   double? _leftClearanceCm;
   double? _frontClearanceCm;
   double? _rightClearanceCm;
@@ -70,13 +67,13 @@ class RoverAiService {
     _resetSweepMemory();
 
     try {
-      // Subscribe BEFORE sending F. This prevents the first telemetry packets
-      // produced after the mode switch from being missed.
+      // Subscribe before switching the STM32 into phone-autonomy mode so the
+      // first telemetry packets are not missed.
       await _subscription?.cancel();
       _subscription = telemetryService.telemetry.listen(_onTelemetry);
 
-      // This is the firmware's explicit phone-autonomy mode command.
-      await commands.autopilotMode();
+      // Mode transition is serialized as STOP -> AUTONOMOUS MODE.
+      await commands.enterAutonomousMode();
 
       _state = AiRunState.running;
     } catch (_) {
@@ -93,6 +90,14 @@ class RoverAiService {
 
     await _subscription?.cancel();
     _subscription = null;
+
+    // Do not switch to another mode until an already-running AI command has
+    // completed. Otherwise its late W/A/D/P packet can arrive after M.
+    final inFlight = _inFlight;
+    if (inFlight != null && !inFlight.isCompleted) {
+      await inFlight.future;
+    }
+
     _resetSweepMemory();
 
     if (wasRunning) {
@@ -109,39 +114,21 @@ class RoverAiService {
     final left = _leftClearanceCm ?? front;
     final right = _rightClearanceCm ?? front;
 
-    if (front <= emergencyStopCm ||
-        (left <= emergencyStopCm && right <= emergencyStopCm)) {
-      return AiDecision(
-        action: AiAction.stop,
-        confidence: 1,
-        scoreLeft: 0,
-        scoreForward: 0,
-        scoreRight: 0,
-        telemetry: t,
-      );
+    if (front <= emergencyStopCm || (left <= emergencyStopCm && right <= emergencyStopCm)) {
+      return AiDecision(action: AiAction.stop, confidence: 1, scoreLeft: 0, scoreForward: 0, scoreRight: 0, telemetry: t);
     }
 
     final l = _clearanceScore(left);
     final f = _clearanceScore(front);
     final r = _clearanceScore(right);
 
-    // Bias away from a detected obstacle while keeping forward travel as the
-    // default when the center sector is clear.
     double leftScore = l;
     double rightScore = r;
     double forwardScore = f;
 
-    if (front < obstacleCm) {
-      forwardScore = 0;
-    }
-
-    if (left < obstacleCm) {
-      leftScore *= 0.35;
-    }
-
-    if (right < obstacleCm) {
-      rightScore *= 0.35;
-    }
+    if (front < obstacleCm) forwardScore = 0;
+    if (left < obstacleCm) leftScore *= 0.35;
+    if (right < obstacleCm) rightScore *= 0.35;
 
     AiAction action;
     double best;
@@ -161,16 +148,13 @@ class RoverAiService {
       second = forwardScore > leftScore ? forwardScore : leftScore;
     }
 
-    // If every sector is blocked, stop instead of repeatedly turning into a
-    // wall.
     if (best <= 0.05) {
       action = AiAction.stop;
       best = 0;
       second = 0;
     }
 
-    final confidence =
-        ((best - second).abs() + 0.5).clamp(0.5, 0.99).toDouble();
+    final confidence = ((best - second).abs() + 0.5).clamp(0.5, 0.99).toDouble();
 
     return AiDecision(
       action: action,
@@ -182,10 +166,9 @@ class RoverAiService {
     );
   }
 
-  double _clearanceScore(double distanceCm) =>
-      distanceCm <= emergencyStopCm
-          ? 0
-          : (distanceCm / 150).clamp(0.0, 1.0).toDouble();
+  double _clearanceScore(double distanceCm) => distanceCm <= emergencyStopCm
+      ? 0
+      : (distanceCm / 150).clamp(0.0, 1.0).toDouble();
 
   void _resetSweepMemory() {
     _leftClearanceCm = null;
@@ -199,8 +182,6 @@ class RoverAiService {
 
     if (distance == null || angle == null) return;
 
-    // Servo range is approximately 30..150 degrees.
-    // 70..110 is treated as the forward corridor.
     if (angle >= 70 && angle <= 110) {
       _frontClearanceCm = _minDistance(_frontClearanceCm, distance);
     } else if (angle < 70) {
@@ -219,6 +200,9 @@ class RoverAiService {
     if (_state != AiRunState.running || _busy) return;
 
     _busy = true;
+    final inFlight = Completer<void>();
+    _inFlight = inFlight;
+
     try {
       final decision = decide(telemetry);
       _lastDecision = decision;
@@ -247,6 +231,8 @@ class RoverAiService {
       } catch (_) {}
     } finally {
       _busy = false;
+      if (!inFlight.isCompleted) inFlight.complete();
+      if (identical(_inFlight, inFlight)) _inFlight = null;
     }
   }
 
