@@ -7,9 +7,28 @@ class RoverBottomNav extends StatelessWidget {
 
   const RoverBottomNav({
     super.key,
-    this.currentIndex = 2, // Radar selected by default
+    this.currentIndex = 2,
     this.onTap,
   });
+
+  void _handleTap(BuildContext context, int index) {
+    onTap?.call(index);
+
+    // Some mode/control screens are pushed above MainNavigationScreen.
+    // Their footer used to update the hidden screen underneath, making
+    // navigation appear broken. Return to the main shell after selecting
+    // a tab so the selected tab becomes visible immediately.
+    final route = ModalRoute.of(context);
+    final routeName = route?.settings.name;
+
+    if (routeName != '/main') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +75,7 @@ class RoverBottomNav extends StatelessWidget {
                   final item = navItems[index];
 
                   return InkWell(
-                    onTap: () => onTap?.call(index),
+                    onTap: () => _handleTap(context, index),
                     borderRadius: BorderRadius.circular(12),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
@@ -96,7 +115,6 @@ class RoverBottomNav extends StatelessWidget {
                 }),
               ),
               const SizedBox(height: 6),
-              // White horizontal gesture/navigation indicator bar
               Container(
                 width: 42,
                 height: 3.5,
