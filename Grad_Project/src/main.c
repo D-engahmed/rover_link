@@ -27,9 +27,6 @@
 #define PHONE_HEARTBEAT_TIMEOUT_TICKS 20U
 #define ULTRASONIC_INVALID_DISTANCE_CM 400U
 
-#define CM_PER_TICK_AT_SPEED   1.0f
-#define TICKS_FOR_CM(cm)       ((u8)((cm) / CM_PER_TICK_AT_SPEED))
-
 u8 Current_Mode = MODE_MANUAL_BT;
 u8 Current_Direction = DIR_STOP_LED;
 u8 Robot_Speed = 50;
@@ -81,7 +78,7 @@ void Matrix_PrintString(char* str)
     ScrollBufferLength = 0;
     CurrentScrollIndex = 0;
 
-    for(u8 i = 0; i < 8; i++) ScrollBuffer[ScrollBufferLength++] = 0x00;
+    for(u8 i=0; i<8; i++) ScrollBuffer[ScrollBufferLength++] = 0x00;
 
     while(*str)
     {
@@ -91,14 +88,13 @@ void Matrix_PrintString(char* str)
         else if(*str >= 'A' && *str <= 'Z') charIndex = *str - 'A' + 2;
 
         for(u8 col = 0; col < 5; col++)
-        {
             ScrollBuffer[ScrollBufferLength++] = Font5x7[charIndex][col];
-        }
+
         ScrollBuffer[ScrollBufferLength++] = 0x00;
         str++;
     }
 
-    for(u8 i = 0; i < 8; i++) ScrollBuffer[ScrollBufferLength++] = 0x00;
+    for(u8 i=0; i<8; i++) ScrollBuffer[ScrollBufferLength++] = 0x00;
 }
 
 static void StopRover(void)
@@ -166,47 +162,38 @@ void App_ControlTask(void)
                     Current_Direction = DIR_FORWARD;
                 }
                 break;
-
             case 'S': case 's':
                 MOTOR_SHIELD_MoveBackward(Robot_Speed);
                 Current_Direction = DIR_BACKWARD;
                 BUZZER_PlayReversing();
                 break;
-
             case 'A': case 'a':
                 MOTOR_SHIELD_TurnLeft(Robot_Speed);
                 Current_Direction = DIR_LEFT;
                 break;
-
             case 'D': case 'd':
                 MOTOR_SHIELD_TurnRight(Robot_Speed);
                 Current_Direction = DIR_RIGHT;
                 break;
-
             case 'Q': case 'q':
                 MOTOR_SHIELD_TurnLeft(Robot_Speed);
                 Current_Direction = DIR_LEFT;
                 break;
-
             case 'E': case 'e':
                 MOTOR_SHIELD_TurnRight(Robot_Speed);
                 Current_Direction = DIR_RIGHT;
                 break;
-
             case 'P': case 'p':
                 StopRover();
                 break;
-
             case '+':
                 if (Robot_Speed <= 90) Robot_Speed += 10;
                 speed_changed = 1;
                 break;
-
             case '-':
                 if (Robot_Speed >= 10) Robot_Speed -= 10;
                 speed_changed = 1;
                 break;
-
             default:
                 break;
         }
@@ -231,10 +218,7 @@ void App_ControlTask(void)
 void App_RadarTask(void)
 {
     Servo_Pos += Servo_Direction;
-    if (Servo_Pos >= 150 || Servo_Pos <= 30)
-    {
-        Servo_Direction = -Servo_Direction;
-    }
+    if (Servo_Pos >= 150 || Servo_Pos <= 30) Servo_Direction = -Servo_Direction;
     SERVO_SetAngle(Servo_Pos);
 
     BTM_SendString((u8 *)"{\"event\":\"radar\",\"angle\":");
@@ -244,24 +228,21 @@ void App_RadarTask(void)
     BTM_SendString((u8 *)"}\r\n");
 }
 
-#define RADAR_CX        64
-#define RADAR_CY        159
-#define RADAR_MAX_CM    100
+#define RADAR_CX 64
+#define RADAR_CY 159
+#define RADAR_MAX_CM 100
 
 static void Radar_DrawBackground(void)
 {
     ST7735_FillScreen(BLACK);
-
     ST7735_DrawCircle(RADAR_CX, RADAR_CY, 35, GREEN);
     ST7735_DrawCircle(RADAR_CX, RADAR_CY, 70, GREEN);
     ST7735_DrawCircle(RADAR_CX, RADAR_CY, 105, GREEN);
     ST7735_DrawCircle(RADAR_CX, RADAR_CY, 140, GREEN);
-
     ST7735_DrawLine(0, RADAR_CY, 127, RADAR_CY, GREEN);
     ST7735_DrawLine(RADAR_CX, RADAR_CY, RADAR_CX, 0, GREEN);
     ST7735_DrawLine(RADAR_CX, RADAR_CY, 20, 20, GREEN);
     ST7735_DrawLine(RADAR_CX, RADAR_CY, 108, 20, GREEN);
-
     ST7735_DrawString(1, RADAR_CY - 39, "35", GREEN, BLACK, 1);
     ST7735_DrawString(1, RADAR_CY - 74, "70", GREEN, BLACK, 1);
     ST7735_DrawString(1, RADAR_CY - 109, "105", GREEN, BLACK, 1);
@@ -269,62 +250,42 @@ static void Radar_DrawBackground(void)
 
 void App_TFTRadarTask(void)
 {
-    static s8 Local_s8LastDir = 1;
-    static u8 Local_u8BlipValid = 0;
-    static s16 Local_s16OldBlipX = 0, Local_s16OldBlipY = 0;
-    static s16 Local_s16OldLineX = RADAR_CX, Local_s16OldLineY = RADAR_CY;
+    static s8 last_dir = 1;
+    static u8 blip_valid = 0;
+    static s16 old_blip_x = 0, old_blip_y = 0;
+    static s16 old_line_x = RADAR_CX, old_line_y = RADAR_CY;
 
-    if ((Servo_Direction > 0 && Local_s8LastDir <= 0) ||
-        (Servo_Direction < 0 && Local_s8LastDir >= 0))
+    if ((Servo_Direction > 0 && last_dir <= 0) || (Servo_Direction < 0 && last_dir >= 0))
     {
         Radar_DrawBackground();
-        Local_u8BlipValid = 0;
+        blip_valid = 0;
     }
-    Local_s8LastDir = Servo_Direction;
+    last_dir = Servo_Direction;
 
-    float angle_rad = Servo_Pos * (3.14159f / 180.0f);
-    u16 Local_u16ClampedDist = (Current_Distance > RADAR_MAX_CM) ? RADAR_MAX_CM : Current_Distance;
-
-    s16 Local_s16LineX = RADAR_CX - (s16)(Local_u16ClampedDist * 1.4f * cos(angle_rad));
-    s16 Local_s16LineY = RADAR_CY - (s16)(Local_u16ClampedDist * 1.4f * sin(angle_rad));
-
-    if (Local_s16LineX < 0) Local_s16LineX = 0;
-    if (Local_s16LineX > 127) Local_s16LineX = 127;
-    if (Local_s16LineY < 0) Local_s16LineY = 0;
-    if (Local_s16LineY > 159) Local_s16LineY = 159;
-
-    ST7735_DrawLine(RADAR_CX, RADAR_CY, (u8)Local_s16OldLineX, (u8)Local_s16OldLineY, BLACK);
-
-    if (Local_u8BlipValid)
     {
-        ST7735_DrawFilledCircle(Local_s16OldBlipX, Local_s16OldBlipY, 2, BLACK);
-        Local_u8BlipValid = 0;
-    }
+        float angle_rad = Servo_Pos * (3.14159f / 180.0f);
+        u16 clamped_dist = (Current_Distance > RADAR_MAX_CM) ? RADAR_MAX_CM : Current_Distance;
+        s16 line_x = RADAR_CX - (s16)(clamped_dist * 1.4f * cos(angle_rad));
+        s16 line_y = RADAR_CY - (s16)(clamped_dist * 1.4f * sin(angle_rad));
 
-    ST7735_DrawLine(RADAR_CX, RADAR_CY, (u8)Local_s16LineX, (u8)Local_s16LineY, GREEN);
+        if (line_x < 0) line_x = 0;
+        if (line_x > 127) line_x = 127;
+        if (line_y < 0) line_y = 0;
+        if (line_y > 159) line_y = 159;
 
-    Local_s16OldLineX = Local_s16LineX;
-    Local_s16OldLineY = Local_s16LineY;
+        ST7735_DrawLine(RADAR_CX, RADAR_CY, (u8)old_line_x, (u8)old_line_y, BLACK);
+        if (blip_valid) ST7735_DrawFilledCircle(old_blip_x, old_blip_y, 2, BLACK);
+        ST7735_DrawLine(RADAR_CX, RADAR_CY, (u8)line_x, (u8)line_y, GREEN);
+        old_line_x = line_x;
+        old_line_y = line_y;
 
-    if (Ultrasonic_Valid && Current_Distance > 0 && Current_Distance <= RADAR_MAX_CM)
-    {
-        ST7735_DrawFilledCircle(Local_s16LineX, Local_s16LineY, 2, RED);
-        Local_s16OldBlipX = Local_s16LineX;
-        Local_s16OldBlipY = Local_s16LineY;
-        Local_u8BlipValid = 1;
-
-        char Local_s8DistText[7];
-        u16 Local_u16D = Current_Distance;
-
-        Local_s8DistText[0] = (Local_u16D >= 100) ? ('0' + (Local_u16D / 100) % 10) : ' ';
-        Local_s8DistText[1] = (Local_u16D >= 10) ? ('0' + (Local_u16D / 10) % 10) : ' ';
-        Local_s8DistText[2] = '0' + (Local_u16D % 10);
-        Local_s8DistText[3] = 'C';
-        Local_s8DistText[4] = 'M';
-        Local_s8DistText[5] = ' ';
-        Local_s8DistText[6] = '\0';
-
-        ST7735_DrawString(2, 2, Local_s8DistText, GREEN, BLACK, 1);
+        if (Ultrasonic_Valid && Current_Distance > 0 && Current_Distance <= RADAR_MAX_CM)
+        {
+            ST7735_DrawFilledCircle(line_x, line_y, 2, RED);
+            old_blip_x = line_x;
+            old_blip_y = line_y;
+            blip_valid = 1;
+        }
     }
 }
 
@@ -333,22 +294,16 @@ void App_TelemetryTask(void)
     Telemetry_Sequence++;
 
     BTM_SendString((u8 *)"{\"timestamp_ms\":0");
-
     BTM_SendString((u8 *)",\"front_distance_cm\":");
     BTM_SendNumber(Current_Distance);
-
     BTM_SendString((u8 *)",\"ultrasonic_distance_cm\":");
     BTM_SendNumber(Current_Distance);
-
-    BTM_SendString((u8 *)",\"radar_angle_deg\":");
-    BTM_SendNumber(Servo_Pos);
-
     BTM_SendString((u8 *)",\"ultrasonic_valid\":");
     BTM_SendNumber(Ultrasonic_Valid);
-
+    BTM_SendString((u8 *)",\"radar_angle_deg\":");
+    BTM_SendNumber(Servo_Pos);
     BTM_SendString((u8 *)",\"speed\":");
     BTM_SendNumber(Robot_Speed);
-
     BTM_SendString((u8 *)",\"direction\":\"");
 
     switch (Current_Direction)
@@ -361,11 +316,8 @@ void App_TelemetryTask(void)
     }
 
     BTM_SendString((u8 *)"\",\"mode\":\"");
-
-    if (Current_Mode == MODE_PHONE_AUTONOMY)
-        BTM_SendString((u8 *)"PHONE_AUTONOMY");
-    else
-        BTM_SendString((u8 *)"MANUAL");
+    if (Current_Mode == MODE_PHONE_AUTONOMY) BTM_SendString((u8 *)"PHONE_AUTONOMY");
+    else BTM_SendString((u8 *)"MANUAL");
 
     BTM_SendString((u8 *)"\",\"sequence\":");
     BTM_SendNumber(Telemetry_Sequence);
@@ -385,17 +337,15 @@ void App_DisplayTask(void)
             case DIR_BACKWARD: Matrix_PrintString("BACKWARD"); break;
             case DIR_LEFT: Matrix_PrintString("LEFT"); break;
             case DIR_RIGHT: Matrix_PrintString("RIGHT"); break;
-            case DIR_STOP_LED: Matrix_PrintString("WARNING! OBSTACLE DETECTED"); break;
+            default: Matrix_PrintString("WARNING! OBSTACLE DETECTED"); break;
         }
         last_direction = Current_Direction;
     }
 
     for(u8 i = 0; i < 8; i++)
     {
-        if((CurrentScrollIndex + i) < ScrollBufferLength)
-            DisplayFrame[i] = ScrollBuffer[CurrentScrollIndex + i];
-        else
-            DisplayFrame[i] = 0x00;
+        if((CurrentScrollIndex + i) < ScrollBufferLength) DisplayFrame[i] = ScrollBuffer[CurrentScrollIndex + i];
+        else DisplayFrame[i] = 0x00;
     }
 
     scroll_timer++;
@@ -403,34 +353,26 @@ void App_DisplayTask(void)
     {
         scroll_timer = 0;
         CurrentScrollIndex++;
-        if (ScrollBufferLength >= 8 && CurrentScrollIndex >= ScrollBufferLength - 8)
-            CurrentScrollIndex = 0;
+        if (ScrollBufferLength > 8 && CurrentScrollIndex >= ScrollBufferLength - 8) CurrentScrollIndex = 0;
     }
 }
 
 void App_UltrasonicTask(void)
 {
-    u16 measured_distance = ULTRASONIC_GetDistance();
+    u16 distance = ULTRASONIC_GetDistance();
 
-    if (measured_distance == 0)
+    if (distance == 0)
     {
         Ultrasonic_Valid = 0;
         Current_Distance = ULTRASONIC_INVALID_DISTANCE_CM;
-
-        if (Current_Mode == MODE_PHONE_AUTONOMY)
-        {
-            StopRover();
-        }
-        return;
     }
-
-    Ultrasonic_Valid = 1;
-    Current_Distance = measured_distance;
-
-    if (Current_Mode == MODE_PHONE_AUTONOMY && Current_Distance <= SAFETY_STOP_DISTANCE_CM)
+    else
     {
-        StopRover();
+        Ultrasonic_Valid = 1;
+        Current_Distance = distance;
     }
+
+    if (Ultrasonic_Valid && Current_Distance <= SAFETY_STOP_DISTANCE_CM) StopRover();
 }
 
 int main(void)
