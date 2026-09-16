@@ -11,7 +11,11 @@ class RoverCommandService {
 
   Stream<CommandTrace> get traces => _traces.stream;
 
-  Future<void> sendCommand(String action, String wireCommand, {CommandSource source = CommandSource.human}) async {
+  Future<void> sendCommand(
+    String action,
+    String wireCommand, {
+    CommandSource source = CommandSource.human,
+  }) async {
     _traces.add(CommandTrace(timestamp: DateTime.now(), source: source, stage: CommandStage.proposed, action: action, wireCommand: wireCommand));
     try {
       _traces.add(CommandTrace(timestamp: DateTime.now(), source: source, stage: CommandStage.approved, action: action, wireCommand: wireCommand));
@@ -26,8 +30,21 @@ class RoverCommandService {
     }
   }
 
-  Future<void> manualMode() => sendCommand('MANUAL MODE', 'M');
+  Future<void> manualMode() => sendCommand('MANUAL MODE', 'M', source: CommandSource.system);
   Future<void> autopilotMode() => sendCommand('AUTONOMOUS MODE', 'F', source: CommandSource.system);
+
+  // Every firmware mode transition first sends STOP. This is intentionally
+  // serialized so an old control loop cannot keep driving after a switch.
+  Future<void> enterManualMode() async {
+    await stop(source: CommandSource.system);
+    await manualMode();
+  }
+
+  Future<void> enterAutonomousMode() async {
+    await stop(source: CommandSource.system);
+    await autopilotMode();
+  }
+
   Future<void> moveForward({CommandSource source = CommandSource.human}) => sendCommand('FORWARD', 'W', source: source);
   Future<void> moveBackward({CommandSource source = CommandSource.human}) => sendCommand('BACKWARD', 'S', source: source);
   Future<void> turnLeft({CommandSource source = CommandSource.human}) => sendCommand('LEFT', 'A', source: source);
