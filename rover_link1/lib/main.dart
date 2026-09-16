@@ -100,6 +100,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   late final RoverAiService roverAiService;
 
   late int _currentIndex;
+  bool _manualTransitionBusy = false;
 
   @override
   void initState() {
@@ -117,8 +118,33 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
+  Future<void> _enterManualMode() async {
+    if (_manualTransitionBusy || !bluetoothService.isReady) return;
+    _manualTransitionBusy = true;
+
+    try {
+      // Stop the phone AI loop first. RoverAiService.stop() waits for an
+      // in-flight AI command before returning, so a late W/A/D packet cannot
+      // arrive after the manual-mode command.
+      await roverAiService.stop();
+
+      // Firmware transition is serialized as STOP -> MANUAL MODE.
+      await roverCommandService.enterManualMode();
+    } finally {
+      _manualTransitionBusy = false;
+    }
+  }
+
   void _onNavTap(int index) {
-    if (index >= 0 && index <= 4) {
+    if (index < 0 || index > 4) return;
+
+    // Drive is the manual-control surface. Entering it must also change the
+    // actual STM32 control mode; changing only the Flutter page is unsafe.
+    if (index == 1) {
+      _enterManualMode();
+    }
+
+    if (mounted) {
       setState(() => _currentIndex = index);
     }
   }
