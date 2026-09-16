@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import 'screens/splash_screen.dart';
 import 'screens/drive_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/radar_screen.dart';
 import 'screens/ai_screen.dart';
 import 'screens/settings_screen.dart';
+
 import 'theme/rover_colors.dart';
+
 import 'services/bluetooth_service.dart';
 import 'services/rover_command_service.dart';
 import 'services/rover_telemetry_service.dart';
@@ -15,6 +18,7 @@ import 'services/rover_ai_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -23,6 +27,7 @@ void main() {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
+
   runApp(const RoverApp());
 }
 
@@ -61,18 +66,25 @@ class AppStartScreen extends StatefulWidget {
 class _AppStartScreenState extends State<AppStartScreen> {
   void _openHome() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+      MaterialPageRoute(
+        builder: (_) => const MainNavigationScreen(),
+      ),
     );
   }
 
   @override
-  Widget build(BuildContext context) => SplashScreen(onFinished: _openHome);
+  Widget build(BuildContext context) {
+    return SplashScreen(onFinished: _openHome);
+  }
 }
 
 class MainNavigationScreen extends StatefulWidget {
   final int initialIndex;
 
-  const MainNavigationScreen({super.key, this.initialIndex = 0});
+  const MainNavigationScreen({
+    super.key,
+    this.initialIndex = 0,
+  });
 
   @override
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
@@ -80,19 +92,31 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final BluetoothService bluetoothService = BluetoothService();
+
   late final RoverCommandService roverCommandService;
   late final RoverTelemetryService roverTelemetryService;
   late final RoverDatasetService roverDatasetService;
   late final RoverAiService roverAiService;
+
   late int _currentIndex;
 
   @override
   void initState() {
     super.initState();
+
     _currentIndex = widget.initialIndex;
+
+    // Keep one command service shared by Driver, Assisted,
+    // Autonomous AI, Home, and Command Monitor.
     roverCommandService = RoverCommandService(bluetoothService);
+
+    // Keep one telemetry stream shared by Radar and AI.
     roverTelemetryService = RoverTelemetryService(bluetoothService);
+
+    // Dataset collector used for future model-training data.
     roverDatasetService = RoverDatasetService();
+
+    // Phone-side AI/navigation service.
     roverAiService = RoverAiService(
       telemetryService: roverTelemetryService,
       commands: roverCommandService,
@@ -107,6 +131,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   Future<void> _onConnected() async {
     if (!bluetoothService.isReady) return;
+
+    // Start the single telemetry listener after Bluetooth connects.
     roverTelemetryService.start();
   }
 
@@ -134,6 +160,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           AiScreen(
             onNavTap: _onNavTap,
             aiService: roverAiService,
+            commandService: roverCommandService,
             telemetryService: roverTelemetryService,
             bluetoothService: bluetoothService,
           ),
@@ -149,8 +176,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   void dispose() {
+    // Stop AI and close the shared streams before Bluetooth is disconnected.
     roverAiService.dispose();
     roverTelemetryService.dispose();
+    roverCommandService.dispose();
     bluetoothService.disconnect();
     super.dispose();
   }
