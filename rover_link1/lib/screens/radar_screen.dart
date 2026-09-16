@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import '../models/radar_detection.dart';
+import '../models/rover_telemetry.dart';
+import '../services/rover_telemetry_service.dart';
 import '../theme/rover_colors.dart';
 import '../widgets/detection_card.dart';
 import '../widgets/metric_card.dart';
@@ -8,10 +13,12 @@ import '../widgets/rover_bottom_nav.dart';
 
 class RadarScreen extends StatefulWidget {
   final ValueChanged<int>? onNavTap;
+  final RoverTelemetryService telemetryService;
 
   const RadarScreen({
     super.key,
     this.onNavTap,
+    required this.telemetryService,
   });
 
   @override
@@ -19,144 +26,133 @@ class RadarScreen extends StatefulWidget {
 }
 
 class _RadarScreenState extends State<RadarScreen> {
-  int _selectedNavIndex = 2; // Radar is active tab
+  StreamSubscription<RoverTelemetry>? _subscription;
+  final Map<int, RadarDetection> _scan = {};
+  RoverTelemetry? _latest;
+  DateTime? _lastPacket;
 
-  // Mock data as requested
-  final List<RadarDetection> _detections = RadarDetection.defaultDetections;
+  @override
+  void initState() {
+    super.initState();
+    _subscription = widget.telemetryService.telemetry.listen(_onTelemetry);
+  }
+
+  void _onTelemetry(RoverTelemetry telemetry) {
+    if (!mounted) return;
+
+    final angle = telemetry.radarAngleDeg ?? telemetry.targetAngleDeg;
+    final distance = telemetry.ultrasonicDistanceCm ?? telemetry.frontDistanceCm;
+
+    setState(() {
+      _latest = telemetry;
+      _lastPacket = DateTime.now();
+
+      if (angle != null && distance != null && distance > 0) {
+        final normalizedAngle = angle.round().clamp(0, 180);
+        _scan[normalizedAngle] = RadarDetection(
+          id: 'ultrasonic-$normalizedAngle',
+          name: 'ULTRASONIC',
+          distance: distance / 100.0,
+          bearing: normalizedAngle.toDouble(),
+          type: DetectionType.obstacle,
+          color: distance <= 40
+              ? RoverColors.obstacleRed
+              : RoverColors.obstacleAmber,
+        );
+      }
+    });
+  }
+
+  List<RadarDetection> get _detections => _scan.values.toList()
+    ..sort((a, b) => a.distance.compareTo(b.distance));
+
+  bool get _live => _lastPacket != null &&
+      DateTime.now().difference(_lastPacket!).inSeconds < 2;
 
   @override
   Widget build(BuildContext context) {
-    // Nearest obstacle calculation
-    final obstacles = _detections.where((d) => d.type == DetectionType.obstacle);
-    final nearestObstacle = obstacles.isNotEmpty
-        ? obstacles.reduce((a, b) => a.distance < b.distance ? a : b)
-        : null;
+    final detections = _detections;
+    final nearest = detections.isEmpty ? null : detections.first;
+    final currentDistance = _latest?.ultrasonicDistanceCm ??
+        _latest?.frontDistanceCm;
+    final currentAngle = _latest?.radarAngleDeg ?? _latest?.targetAngleDeg;
 
     return Scaffold(
       backgroundColor: RoverColors.background,
       body: SafeArea(
         child: Column(
           children: [
-            // Top App Bar / Title Header
             _buildHeader(),
-
-            // Main Scrollable Body
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Radar Scope Widget
-                    const SizedBox(height: 4),
                     RadarScope(
-                      detections: _detections,
+                      detections: detections,
                       maxDistance: 8.0,
                     ),
                     const SizedBox(height: 18),
-
-                    // Metrics Cards Row: "NEAREST OBSTACLE" & "TRACKED OBJECTS"
                     Row(
                       children: [
                         Expanded(
                           child: MetricCard(
                             title: 'NEAREST OBSTACLE',
-                            value: nearestObstacle != null
-                                ? nearestObstacle.distance.toStringAsFixed(2)
-                                : '2.10',
+                            value: nearest?.distance.toStringAsFixed(2) ?? '--',
                             unit: 'm',
                             icon: Icons.warning_amber_rounded,
                             accentColor: RoverColors.obstacleRed,
-                            subtext: nearestObstacle != null
-                                ? '@ ${nearestObstacle.bearing.toStringAsFixed(0)}° Bearing'
-                                : '@ 140° Bearing',
+                            subtext: nearest == null
+                                ? 'Waiting for sensor'
+                                : '@ ${nearest.bearing.toStringAsFixed(0)}°',
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: MetricCard(
-                            title: 'TRACKED OBJECTS',
-                            value: '${_detections.length}',
+                            title: 'SCAN POINTS',
+                            value: '${detections.length}',
                             icon: Icons.radar_rounded,
                             accentColor: RoverColors.radarGreen,
-                            subtext: 'Active in 8m range',
+                            subtext: 'Live ultrasonic samples',
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 14),
+                    _buildLiveTelemetryCard(currentDistance, currentAngle),
                     const SizedBox(height: 22),
-
-                    // "DETECTIONS" Section Header
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          children: [
-                            const Text(
-                              'DETECTIONS',
-                              style: TextStyle(
-                                color: RoverColors.textPrimary,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 1.2,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: RoverColors.cardBackground,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: RoverColors.cardBorder,
-                                  width: 1.0,
-                                ),
-                              ),
-                              child: Text(
-                                '${_detections.length}',
-                                style: const TextStyle(
-                                  color: RoverColors.radarGreen,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: RoverColors.radarGreen.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(6),
+                        const Text(
+                          'LIVE DETECTIONS',
+                          style: TextStyle(
+                            color: RoverColors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2,
                           ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.refresh_rounded,
-                                size: 12,
-                                color: RoverColors.radarGreen,
-                              ),
-                              SizedBox(width: 4),
-                              Text(
-                                'REAL-TIME',
-                                style: TextStyle(
-                                  color: RoverColors.radarGreen,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ],
+                        ),
+                        Text(
+                          _live ? 'LIVE' : 'NO LIVE DATA',
+                          style: TextStyle(
+                            color: _live
+                                ? RoverColors.radarGreen
+                                : RoverColors.textMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
-
-                    // Detection List Items
-                    ..._detections.map((detection) => DetectionCard(detection: detection)),
+                    if (detections.isEmpty)
+                      _buildEmptyState()
+                    else
+                      ...detections.map((d) => DetectionCard(detection: d)),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -165,16 +161,9 @@ class _RadarScreenState extends State<RadarScreen> {
           ],
         ),
       ),
-
-      // Bottom Navigation Bar
       bottomNavigationBar: RoverBottomNav(
-        currentIndex: _selectedNavIndex,
-        onTap: (index) {
-          setState(() {
-            _selectedNavIndex = index;
-          });
-          widget.onNavTap?.call(index);
-        },
+        currentIndex: 2,
+        onTap: widget.onNavTap,
       ),
     );
   }
@@ -184,92 +173,56 @@ class _RadarScreenState extends State<RadarScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       decoration: const BoxDecoration(
         color: RoverColors.background,
-        border: Border(
-          bottom: BorderSide(
-            color: RoverColors.cardBorder,
-            width: 1.0,
-          ),
-        ),
+        border: Border(bottom: BorderSide(color: RoverColors.cardBorder)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // "LIVE RADAR" Title & Subtitle
-          Column(
+          const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 9,
-                    height: 9,
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      color: RoverColors.radarGreen,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: RoverColors.radarGreen.withValues(alpha: 0.8),
-                          blurRadius: 8,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Text(
-                    'LIVE RADAR',
-                    style: TextStyle(
-                      color: RoverColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                ],
+              Text(
+                'LIVE RADAR',
+                style: TextStyle(
+                  color: RoverColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.5,
+                ),
               ),
-              const SizedBox(height: 2),
-              const Padding(
-                padding: EdgeInsets.only(left: 17),
-                child: Text(
-                  'AUTONOMOUS ROVER SYSTEM',
-                  style: TextStyle(
-                    color: RoverColors.textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.2,
-                  ),
+              SizedBox(height: 2),
+              Text(
+                'HC-SR04 TELEMETRY',
+                style: TextStyle(
+                  color: RoverColors.textMuted,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.2,
                 ),
               ),
             ],
           ),
-
-          // Status Badge
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
               color: RoverColors.cardBackground,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: RoverColors.cardBorder,
-                width: 1.0,
-              ),
+              border: Border.all(color: RoverColors.cardBorder),
             ),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   Icons.sensors_rounded,
                   size: 14,
-                  color: RoverColors.radarGreen,
+                  color: _live ? RoverColors.radarGreen : RoverColors.textMuted,
                 ),
                 const SizedBox(width: 5),
-                const Text(
-                  '360° ACTIVE',
+                Text(
+                  _live ? 'LIVE' : 'WAITING',
                   style: TextStyle(
-                    color: RoverColors.radarGreen,
+                    color: _live ? RoverColors.radarGreen : RoverColors.textMuted,
                     fontSize: 10.5,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 0.6,
                   ),
                 ),
               ],
@@ -278,5 +231,62 @@ class _RadarScreenState extends State<RadarScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildLiveTelemetryCard(double? distance, double? angle) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: RoverColors.cardBackground,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: RoverColors.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _metric('DISTANCE', distance == null ? '--' : '${distance.toStringAsFixed(1)} cm')),
+          Expanded(child: _metric('SERVO ANGLE', angle == null ? '--' : '${angle.toStringAsFixed(0)}°')),
+          Expanded(child: _metric('MODE', _latest?.mode ?? '--')),
+        ],
+      ),
+    );
+  }
+
+  Widget _metric(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: RoverColors.textMuted, fontSize: 9)),
+        const SizedBox(height: 5),
+        Text(value, style: const TextStyle(color: RoverColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w800)),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: RoverColors.cardBackground,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: RoverColors.cardBorder),
+      ),
+      child: const Column(
+        children: [
+          Icon(Icons.sensors_off_rounded, color: RoverColors.textMuted, size: 32),
+          SizedBox(height: 10),
+          Text('No live ultrasonic telemetry yet', style: TextStyle(color: RoverColors.textPrimary, fontWeight: FontWeight.w700)),
+          SizedBox(height: 5),
+          Text('Connect the rover and wait for STM32 telemetry.', textAlign: TextAlign.center, style: TextStyle(color: RoverColors.textMuted, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
   }
 }
