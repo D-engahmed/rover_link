@@ -67,6 +67,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
   void _openHome() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
+        settings: const RouteSettings(name: '/main'),
         builder: (_) => const MainNavigationScreen(),
       ),
     );
@@ -106,17 +107,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
     _currentIndex = widget.initialIndex;
 
-    // Keep one command service shared by Driver, Assisted,
-    // Autonomous AI, Home, and Command Monitor.
     roverCommandService = RoverCommandService(bluetoothService);
-
-    // Keep one telemetry stream shared by Radar and AI.
     roverTelemetryService = RoverTelemetryService(bluetoothService);
-
-    // Dataset collector used for future model-training data.
     roverDatasetService = RoverDatasetService();
 
-    // Phone-side AI/navigation service.
     roverAiService = RoverAiService(
       telemetryService: roverTelemetryService,
       commands: roverCommandService,
@@ -131,8 +125,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   Future<void> _onConnected() async {
     if (!bluetoothService.isReady) return;
-
-    // Start the single telemetry listener after Bluetooth connects.
     roverTelemetryService.start();
   }
 
@@ -176,7 +168,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   void dispose() {
-    // Stop AI and close the shared streams before Bluetooth is disconnected.
     roverAiService.dispose();
     roverTelemetryService.dispose();
     roverCommandService.dispose();
