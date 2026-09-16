@@ -54,7 +54,12 @@ class RoverAiService {
   RoverAiService({
     required this.telemetryService,
     required this.commands,
-  });
+  }) {
+    // Manual mode can be selected from the mode screen without going through
+    // RoverAiService directly. Register the transition hook so that path is
+    // just as safe as pressing the AI STOP button.
+    commands.beforeManualMode = stop;
+  }
 
   AiRunState get state => _state;
   AiDecision? get lastDecision => _lastDecision;
