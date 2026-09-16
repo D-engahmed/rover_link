@@ -91,7 +91,8 @@ class BluetoothService {
 
       await _closeCurrentConnection();
 
-      final newConnection = await bluetooth.connect(address: address).timeout(timeout);
+      final newConnection =
+          await bluetooth.connect(address: address).timeout(timeout);
       _connection = newConnection;
       _connectedAddress = address;
       _state = BluetoothConnectionState.connected;
@@ -103,7 +104,9 @@ class BluetoothService {
       await _closeCurrentConnection();
       _state = BluetoothConnectionState.disconnected;
       _lastError = 'Connection timeout';
-      throw Exception('Bluetooth connection timed out after ${timeout.inSeconds}s');
+      throw Exception(
+        'Bluetooth connection timed out after ${timeout.inSeconds}s',
+      );
     } catch (e) {
       await _closeCurrentConnection();
       _state = BluetoothConnectionState.disconnected;
@@ -120,8 +123,18 @@ class BluetoothService {
       throw StateError('Bluetooth is not ready. State: $_state');
     }
 
+    if (command.length != 1) {
+      throw ArgumentError(
+        'Rover command must be exactly one byte, received: "$command"',
+      );
+    }
+
     try {
-      await connection.output.writeString('$command\r\n');
+      // IMPORTANT: the STM32 firmware consumes one command byte at a time.
+      // Do not append CR/LF here. CR/LF would become extra commands and be
+      // reported as UNKNOWN_COMMAND by App_ControlTask().
+      await connection.output.writeString(command);
+      await connection.output.allSent;
     } catch (e) {
       await _handleSocketFailure(e);
       throw Exception('Bluetooth send failed: $e');
@@ -168,13 +181,11 @@ class BluetoothService {
 
   Future<void> testConnection(String address) async {
     final connection = await connectToDevice(address);
-    print('Bluetooth connected: $address / $connection');
+    // Intentionally no production logging here.
+    if (connection.isConnected) return;
   }
 
   Future<void> testScan() async {
-    final devices = await scanDevices();
-    for (final device in devices) {
-      print('Device: ${device.name} / ${device.address}');
-    }
+    await scanDevices();
   }
 }
