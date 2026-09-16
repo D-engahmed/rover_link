@@ -14,7 +14,6 @@
 #include "HAL/TFT/ST7735_interface.h"
 #include "OS_Scheduler/OS_interface.h"
 #include "APP/SAFETY/safety_policy.h"
-#include <stdio.h>
 
 #define MODE_MANUAL_BT 1
 #define MODE_PHONE_AUTONOMY 2
@@ -33,6 +32,8 @@ u8 Servo_Pos = 90;
 s8 Servo_Direction = 3;
 static u8 Phone_Command_Age = PHONE_HEARTBEAT_TIMEOUT_TICKS;
 static u8 DisplayFrame[8];
+static u16 Command_Sequence = 0;
+static u16 Telemetry_Sequence = 0;
 
 void Buzzer_OS_Task(void)
 {
@@ -56,6 +57,73 @@ static u8 ForwardAllowed(void)
     return 1;
 }
 
+static void SendCommandAck(u8 command, u8 status, u8 reason)
+{
+    BTM_SendString((u8 *)"{\"event\":\"ack\",\"seq\":");
+    BTM_SendNumber(Command_Sequence);
+    BTM_SendString((u8 *)",\"command\":\"");
+
+    switch (command)
+    {
+        case 'F': case 'f': BTM_SendString((u8 *)"F"); break;
+        case 'M': case 'm': BTM_SendString((u8 *)"M"); break;
+        case 'W': case 'w': BTM_SendString((u8 *)"W"); break;
+        case 'S': case 's': BTM_SendString((u8 *)"S"); break;
+        case 'A': case 'a': BTM_SendString((u8 *)"A"); break;
+        case 'D': case 'd': BTM_SendString((u8 *)"D"); break;
+        case 'Q': case 'q': BTM_SendString((u8 *)"Q"); break;
+        case 'E': case 'e': BTM_SendString((u8 *)"E"); break;
+        case 'P': case 'p': BTM_SendString((u8 *)"P"); break;
+        case '+': BTM_SendString((u8 *)"+"); break;
+        case '-': BTM_SendString((u8 *)"-"); break;
+        default: BTM_SendString((u8 *)"UNKNOWN"); break;
+    }
+
+    BTM_SendString((u8 *)"\",\"status\":\"");
+
+    if (status == 1)
+    {
+        BTM_SendString((u8 *)"EXECUTED");
+    }
+    else if (status == 2)
+    {
+        BTM_SendString((u8 *)"BLOCKED");
+    }
+    else
+    {
+        BTM_SendString((u8 *)"REJECTED");
+    }
+
+    BTM_SendString((u8 *)"\"");
+
+    if (reason == 1)
+    {
+        BTM_SendString((u8 *)",\"reason\":\"OBSTACLE\"");
+    }
+    else if (reason == 2)
+    {
+        BTM_SendString((u8 *)",\"reason\":\"UNKNOWN_COMMAND\"");
+    }
+
+    BTM_SendString((u8 *)"}\r\n");
+}
+
+static void SendModeEvent(void)
+{
+    BTM_SendString((u8 *)"{\"event\":\"mode\",\"mode\":\"");
+
+    if (Current_Mode == MODE_PHONE_AUTONOMY)
+    {
+        BTM_SendString((u8 *)"PHONE_AUTONOMY");
+    }
+    else
+    {
+        BTM_SendString((u8 *)"MANUAL");
+    }
+
+    BTM_SendString((u8 *)"\"}\r\n");
+}
+
 void App_ControlTask(void)
 {
     u8 data;
@@ -65,13 +133,15 @@ void App_ControlTask(void)
     {
         data = BTM_ReceiveData();
         Phone_Command_Age = 0;
+        Command_Sequence++;
 
         if (data == 'F' || data == 'f')
         {
             Current_Mode = MODE_PHONE_AUTONOMY;
             StopRover();
             BUZZER_PlayStartup();
-            BTM_SendString((u8 *)"{\"event\":\"mode\",\"mode\":\"PHONE_AUTONOMY\"}\r\n");
+            SendModeEvent();
+            SendCommandAck(data, 1, 0);
             return;
         }
 
@@ -80,7 +150,8 @@ void App_ControlTask(void)
             Current_Mode = MODE_MANUAL_BT;
             StopRover();
             BUZZER_PlayModeSwitch();
-            BTM_SendString((u8 *)"{\"event\":\"mode\",\"mode\":\"MANUAL\"}\r\n");
+            SendModeEvent();
+            SendCommandAck(data, 1, 0);
             return;
         }
 
@@ -97,58 +168,109 @@ void App_ControlTask(void)
                 {
                     MOTOR_SHIELD_MoveForward(Robot_Speed);
                     Current_Direction = DIR_FORWARD;
+                    SendCommandAck(data, 1, 0);
+                }
+                else
+                {
+                    SendCommandAck(data, 2, 1);
                 }
                 break;
+
             case 'S': case 's':
                 MOTOR_SHIELD_MoveBackward(Robot_Speed);
                 Current_Direction = DIR_BACKWARD;
                 BUZZER_PlayReversing();
+                SendCommandAck(data, 1, 0);
                 break;
+
             case 'A': case 'a':
                 MOTOR_SHIELD_TurnLeft(Robot_Speed);
                 Current_Direction = DIR_LEFT;
+                SendCommandAck(data, 1, 0);
                 break;
+
             case 'D': case 'd':
                 MOTOR_SHIELD_TurnRight(Robot_Speed);
                 Current_Direction = DIR_RIGHT;
+                SendCommandAck(data, 1, 0);
                 break;
+
             case 'Q': case 'q':
                 MOTOR_SHIELD_TurnLeft(Robot_Speed);
                 Current_Direction = DIR_LEFT;
+                SendCommandAck(data, 1, 0);
                 break;
+
             case 'E': case 'e':
                 MOTOR_SHIELD_TurnRight(Robot_Speed);
                 Current_Direction = DIR_RIGHT;
+                SendCommandAck(data, 1, 0);
                 break;
+
             case 'P': case 'p':
                 StopRover();
+                SendCommandAck(data, 1, 0);
                 break;
+
             case '+':
                 if (Robot_Speed <= 90) Robot_Speed += 10;
                 speed_changed = 1;
                 break;
+
             case '-':
                 if (Robot_Speed >= 10) Robot_Speed -= 10;
                 speed_changed = 1;
                 break;
+
             default:
+                SendCommandAck(data, 0, 2);
                 break;
         }
 
         if (speed_changed && Current_Direction != DIR_STOP_LED)
         {
-            if (Current_Direction == DIR_FORWARD && !ForwardAllowed()) return;
-            if (Current_Direction == DIR_FORWARD) MOTOR_SHIELD_MoveForward(Robot_Speed);
-            else if (Current_Direction == DIR_BACKWARD) MOTOR_SHIELD_MoveBackward(Robot_Speed);
-            else if (Current_Direction == DIR_LEFT) MOTOR_SHIELD_TurnLeft(Robot_Speed);
-            else if (Current_Direction == DIR_RIGHT) MOTOR_SHIELD_TurnRight(Robot_Speed);
+            if (Current_Direction == DIR_FORWARD && !ForwardAllowed())
+            {
+                SendCommandAck(data, 2, 1);
+                return;
+            }
+
+            if (Current_Direction == DIR_FORWARD)
+            {
+                MOTOR_SHIELD_MoveForward(Robot_Speed);
+            }
+            else if (Current_Direction == DIR_BACKWARD)
+            {
+                MOTOR_SHIELD_MoveBackward(Robot_Speed);
+            }
+            else if (Current_Direction == DIR_LEFT)
+            {
+                MOTOR_SHIELD_TurnLeft(Robot_Speed);
+            }
+            else if (Current_Direction == DIR_RIGHT)
+            {
+                MOTOR_SHIELD_TurnRight(Robot_Speed);
+            }
+
+            SendCommandAck(data, 1, 0);
+        }
+        else if (speed_changed)
+        {
+            SendCommandAck(data, 1, 0);
         }
     }
 
     if (Current_Mode == MODE_PHONE_AUTONOMY)
     {
-        if (Phone_Command_Age < PHONE_HEARTBEAT_TIMEOUT_TICKS) Phone_Command_Age++;
-        if (Phone_Command_Age >= PHONE_HEARTBEAT_TIMEOUT_TICKS) StopRover();
+        if (Phone_Command_Age < PHONE_HEARTBEAT_TIMEOUT_TICKS)
+        {
+            Phone_Command_Age++;
+        }
+
+        if (Phone_Command_Age >= PHONE_HEARTBEAT_TIMEOUT_TICKS)
+        {
+            StopRover();
+        }
     }
 }
 
@@ -172,21 +294,57 @@ void App_RadarTask(void)
 
 void App_TelemetryTask(void)
 {
-    char buffer[160];
-    int length = snprintf(
-        buffer,
-        sizeof(buffer),
-        "{\"timestamp_ms\":0,\"front_distance_cm\":%u,\"radar_angle_deg\":%u,\"mode\":\"%s\"}\r\n",
-        Current_Distance,
-        Servo_Pos,
-        Current_Mode == MODE_PHONE_AUTONOMY ? "PHONE_AUTONOMY" : "MANUAL");
+    Telemetry_Sequence++;
 
-    if (length > 0) BTM_SendString((u8 *)buffer);
+    BTM_SendString((u8 *)"{\"timestamp_ms\":0");
+    BTM_SendString((u8 *)",\"front_distance_cm\":");
+    BTM_SendNumber(Current_Distance);
+    BTM_SendString((u8 *)",\"ultrasonic_distance_cm\":");
+    BTM_SendNumber(Current_Distance);
+    BTM_SendString((u8 *)",\"radar_angle_deg\":");
+    BTM_SendNumber(Servo_Pos);
+    BTM_SendString((u8 *)",\"speed\":");
+    BTM_SendNumber(Robot_Speed);
+    BTM_SendString((u8 *)",\"direction\":\"");
+
+    switch (Current_Direction)
+    {
+        case DIR_FORWARD:
+            BTM_SendString((u8 *)"FORWARD");
+            break;
+        case DIR_BACKWARD:
+            BTM_SendString((u8 *)"BACKWARD");
+            break;
+        case DIR_LEFT:
+            BTM_SendString((u8 *)"LEFT");
+            break;
+        case DIR_RIGHT:
+            BTM_SendString((u8 *)"RIGHT");
+            break;
+        default:
+            BTM_SendString((u8 *)"STOP");
+            break;
+    }
+
+    BTM_SendString((u8 *)"\",\"mode\":\"");
+
+    if (Current_Mode == MODE_PHONE_AUTONOMY)
+    {
+        BTM_SendString((u8 *)"PHONE_AUTONOMY");
+    }
+    else
+    {
+        BTM_SendString((u8 *)"MANUAL");
+    }
+
+    BTM_SendString((u8 *)"\",\"sequence\":");
+    BTM_SendNumber(Telemetry_Sequence);
+    BTM_SendString((u8 *)"}\r\n");
 }
 
 void App_DisplayTask(void)
 {
-    /* Keep a deterministic safe display state. TFT rendering can be restored independently. */
+    /* Keep the existing LED matrix/TFT ownership unchanged. */
     if (Current_Direction == DIR_STOP_LED)
     {
         for (u8 i = 0; i < 8; i++) DisplayFrame[i] = 0;
