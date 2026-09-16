@@ -1,81 +1,180 @@
-  import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
+import 'dart:async';
+
+import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
+
+enum BluetoothConnectionState {
+  disconnected,
+  scanning,
+  connecting,
+  connected,
+  ready,
+  failed,
+}
 
 class BluetoothService {
-  final FlutterClassicBluetooth bluetooth =
-      FlutterClassicBluetooth();
-      BtcConnection? connection;
+  final FlutterClassicBluetooth bluetooth = FlutterClassicBluetooth();
+
+  BtcConnection? _connection;
+  BluetoothConnectionState _state = BluetoothConnectionState.disconnected;
+  String? _connectedAddress;
+  String? _lastError;
+  bool _connecting = false;
+
+  BluetoothConnectionState get state => _state;
+  bool get isConnected => _connection != null &&
+      (_state == BluetoothConnectionState.connected ||
+          _state == BluetoothConnectionState.ready);
+  bool get isReady => _state == BluetoothConnectionState.ready;
+  String? get connectedAddress => _connectedAddress;
+  String? get lastError => _lastError;
 
   Future<bool> isBluetoothSupported() async {
-    return await bluetooth.isSupported();
+    try {
+      return await bluetooth.isSupported();
+    } catch (e) {
+      _setFailed('Bluetooth support check failed: $e');
+      return false;
+    }
   }
 
   Future<bool> isBluetoothEnabled() async {
-    return await bluetooth.isEnabled();
+    try {
+      return await bluetooth.isEnabled();
+    } catch (e) {
+      _setFailed('Bluetooth state check failed: $e');
+      return false;
+    }
   }
 
-  Future<List<BtcDevice>> scanDevices() async {
-    return await bluetooth.scan(
-      timeout: const Duration(seconds: 8),
-    );
+  Future<List<BtcDevice>> scanDevices({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    _state = BluetoothConnectionState.scanning;
+    _lastError = null;
+
+    try {
+      if (!await isBluetoothSupported()) {
+        throw Exception('Bluetooth is not supported on this device');
+      }
+      if (!await isBluetoothEnabled()) {
+        throw Exception('Bluetooth is disabled');
+      }
+
+      final devices = await bluetooth.scan(timeout: timeout);
+      _state = BluetoothConnectionState.disconnected;
+      return devices;
+    } catch (e) {
+      _setFailed('Bluetooth scan failed: $e');
+      rethrow;
+    }
   }
-   Future<BtcConnection> connectToDevice(String address) async {
-  connection = await bluetooth.connect(
-    address: address,
-  );
 
-  return connection!;
-}
-   Future<void> sendCommand(String command) async {
-  if (connection == null) {
-    throw Exception('Bluetooth device is not connected');
+  Future<BtcConnection> connectToDevice(
+    String address, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    if (_connecting) {
+      throw StateError('A Bluetooth connection attempt is already running');
+    }
+
+    _connecting = true;
+    _state = BluetoothConnectionState.connecting;
+    _lastError = null;
+
+    try {
+      if (!await isBluetoothSupported()) {
+        throw Exception('Bluetooth is not supported');
+      }
+      if (!await isBluetoothEnabled()) {
+        throw Exception('Bluetooth is disabled');
+      }
+
+      await _closeCurrentConnection();
+
+      final newConnection = await bluetooth.connect(address: address).timeout(timeout);
+      _connection = newConnection;
+      _connectedAddress = address;
+      _state = BluetoothConnectionState.connected;
+
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      _state = BluetoothConnectionState.ready;
+      return newConnection;
+    } on TimeoutException {
+      await _closeCurrentConnection();
+      _state = BluetoothConnectionState.disconnected;
+      _lastError = 'Connection timeout';
+      throw Exception('Bluetooth connection timed out after ${timeout.inSeconds}s');
+    } catch (e) {
+      await _closeCurrentConnection();
+      _state = BluetoothConnectionState.disconnected;
+      _lastError = e.toString();
+      throw Exception('Failed to connect to $address: $e');
+    } finally {
+      _connecting = false;
+    }
   }
 
-   await connection!.output.writeString(command);
-}
- Stream<String> receiveMessages() {
-  if (connection == null) {
-    throw Exception('Bluetooth device is not connected');
+  Future<void> sendCommand(String command) async {
+    final connection = _connection;
+    if (connection == null || !isReady) {
+      throw StateError('Bluetooth is not ready. State: $_state');
+    }
+
+    try {
+      await connection.output.writeString('$command\r\n');
+    } catch (e) {
+      await _handleSocketFailure(e);
+      throw Exception('Bluetooth send failed: $e');
+    }
   }
 
-  return connection!.input.lines();
-}
-   bool get isConnected => connection != null;
+  Stream<String> receiveMessages() {
+    final connection = _connection;
+    if (connection == null || !isConnected) {
+      throw StateError('Bluetooth is not connected');
+    }
 
-   Future<void> testConnection(String address) async {
-  try {
+    return connection.input.lines().handleError((Object error) async {
+      await _handleSocketFailure(error);
+    });
+  }
+
+  Future<void> disconnect() async {
+    await _closeCurrentConnection();
+    _connectedAddress = null;
+    _lastError = null;
+    _state = BluetoothConnectionState.disconnected;
+  }
+
+  Future<void> _handleSocketFailure(Object error) async {
+    _lastError = error.toString();
+    await _closeCurrentConnection();
+    _state = BluetoothConnectionState.disconnected;
+  }
+
+  Future<void> _closeCurrentConnection() async {
+    final connection = _connection;
+    _connection = null;
+    if (connection == null) return;
+    try {
+      await connection.finish();
+    } catch (_) {}
+  }
+
+  void _setFailed(String error) {
+    _lastError = error;
+    _state = BluetoothConnectionState.failed;
+  }
+
+  Future<void> testConnection(String address) async {
     final connection = await connectToDevice(address);
-
-    print('===== BLUETOOTH CONNECT =====');
-    print('Connected successfully!');
-    print('Address: $address');
-    print('Connection: $connection');
-    print('=============================');
-  } catch (e) {
-    print('===== BLUETOOTH CONNECT =====');
-    print('Connection failed!');
-    print('Error: $e');
-    print('=============================');
+    print('Bluetooth connected: $address / $connection');
   }
-} 
-Future<void> disconnectFromDevice(BtcConnection connection) async {
-  await connection.finish();
-
-  print('===== BLUETOOTH DISCONNECT =====');
-  print('Disconnected successfully!');
-  print('===============================');
-}
 
   Future<void> testScan() async {
     final devices = await scanDevices();
-
-    print('===== BLUETOOTH SCAN =====');
-    print('Devices found: ${devices.length}');
-
     for (final device in devices) {
-      print('Device: ${device.name}');
-      print('Address: ${device.address}');
+      print('Device: ${device.name} / ${device.address}');
     }
-
-    print('==========================');
   }
 }
