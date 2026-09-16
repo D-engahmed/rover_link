@@ -1,12 +1,11 @@
 import 'dart:async';
 
-import '../models/command_trace.dart';
 import '../models/rover_telemetry.dart';
 import 'rover_command_service.dart';
 import 'rover_telemetry_service.dart';
 
 enum AiAction { stop, forward, left, right }
-enum AiRunState { stopped, starting, running, error }
+enum AiRunState { stopped, starting, running, following, error }
 
 class AiDecision {
   final AiAction action;
@@ -36,6 +35,9 @@ class AiDecision {
 class RoverAiService {
   static const double emergencyStopCm = 18;
   static const double obstacleCm = 45;
+  static const double followStopCm = 25;
+  static const double followDesiredCm = 60;
+  static const double followAngleDeadbandDeg = 12;
 
   final RoverTelemetryService telemetryService;
   final RoverCommandService commands;
@@ -55,9 +57,6 @@ class RoverAiService {
     required this.telemetryService,
     required this.commands,
   }) {
-    // Manual mode can be selected from the mode screen without going through
-    // RoverAiService directly. Register the transition hook so that path is
-    // just as safe as pressing the AI STOP button.
     commands.beforeManualMode = stop;
   }
 
@@ -68,18 +67,10 @@ class RoverAiService {
   Future<void> start() async {
     if (_state == AiRunState.running || _state == AiRunState.starting) return;
 
-    _state = AiRunState.starting;
-    _resetSweepMemory();
-
+    await _prepareController(AiRunState.starting);
     try {
-      // Subscribe before switching the STM32 into phone-autonomy mode so the
-      // first telemetry packets are not missed.
-      await _subscription?.cancel();
       _subscription = telemetryService.telemetry.listen(_onTelemetry);
-
-      // Mode transition is serialized as STOP -> AUTONOMOUS MODE.
       await commands.enterAutonomousMode();
-
       _state = AiRunState.running;
     } catch (_) {
       _state = AiRunState.error;
@@ -89,15 +80,90 @@ class RoverAiService {
     }
   }
 
+  Future<void> startFollow() async {
+    if (_state == AiRunState.following || _state == AiRunState.starting) return;
+
+    await _prepareController(AiRunState.starting);
+    try {
+      _subscription = telemetryService.telemetry.listen(_onFollowTelemetry);
+      await commands.enterAutonomousMode();
+      _state = AiRunState.following;
+    } catch (_) {
+      _state = AiRunState.error;
+      await _subscription?.cancel();
+      _subscription = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _prepareController(AiRunState state) async {
+    _state = state;
+    _resetSweepMemory();
+    await _subscription?.cancel();
+    _subscription = null;
+  }
+
+  Future<void> _onFollowTelemetry(RoverTelemetry telemetry) async {
+    if (_state != AiRunState.following || _busy) return;
+
+    final targetDistance = telemetry.targetDistanceCm;
+    final targetAngle = telemetry.targetAngleDeg;
+
+    // Follow-me needs an actual target estimate. Never confuse the radar
+    // servo's sweep angle with a target bearing.
+    if (targetDistance == null || targetAngle == null) return;
+
+    _busy = true;
+    final inFlight = Completer<void>();
+    _inFlight = inFlight;
+
+    try {
+      AiAction action;
+      if (targetDistance <= followStopCm) {
+        action = AiAction.stop;
+      } else if (targetAngle < -followAngleDeadbandDeg) {
+        action = AiAction.left;
+      } else if (targetAngle > followAngleDeadbandDeg) {
+        action = AiAction.right;
+      } else if (targetDistance > followDesiredCm) {
+        action = AiAction.forward;
+      } else {
+        action = AiAction.stop;
+      }
+
+      switch (action) {
+        case AiAction.forward:
+          await commands.moveForward(source: CommandSource.ai);
+          break;
+        case AiAction.left:
+          await commands.turnLeft(source: CommandSource.ai);
+          break;
+        case AiAction.right:
+          await commands.turnRight(source: CommandSource.ai);
+          break;
+        case AiAction.stop:
+          await commands.stop(source: CommandSource.ai);
+          break;
+      }
+    } catch (_) {
+      _state = AiRunState.error;
+      try {
+        await commands.stop(source: CommandSource.safety);
+      } catch (_) {}
+    } finally {
+      _busy = false;
+      if (!inFlight.isCompleted) inFlight.complete();
+      if (identical(_inFlight, inFlight)) _inFlight = null;
+    }
+  }
+
   Future<void> stop() async {
-    final wasRunning = _state != AiRunState.stopped;
+    final wasActive = _state != AiRunState.stopped;
     _state = AiRunState.stopped;
 
     await _subscription?.cancel();
     _subscription = null;
 
-    // Do not switch to another mode until an already-running AI command has
-    // completed. Otherwise its late W/A/D/P packet can arrive after M.
     final inFlight = _inFlight;
     if (inFlight != null && !inFlight.isCompleted) {
       await inFlight.future;
@@ -105,7 +171,7 @@ class RoverAiService {
 
     _resetSweepMemory();
 
-    if (wasRunning) {
+    if (wasActive) {
       try {
         await commands.stop(source: CommandSource.system);
       } catch (_) {}
@@ -213,20 +279,18 @@ class RoverAiService {
       _lastDecision = decision;
       _decisions.add(decision);
 
-      const source = CommandSource.ai;
-
       switch (decision.action) {
         case AiAction.forward:
-          await commands.moveForward(source: source);
+          await commands.moveForward(source: CommandSource.ai);
           break;
         case AiAction.left:
-          await commands.turnLeft(source: source);
+          await commands.turnLeft(source: CommandSource.ai);
           break;
         case AiAction.right:
-          await commands.turnRight(source: source);
+          await commands.turnRight(source: CommandSource.ai);
           break;
         case AiAction.stop:
-          await commands.stop(source: source);
+          await commands.stop(source: CommandSource.ai);
           break;
       }
     } catch (_) {
