@@ -7,6 +7,10 @@ class RoverCommandService {
   final BluetoothService bluetoothService;
   final StreamController<CommandTrace> _traces = StreamController<CommandTrace>.broadcast();
 
+  // Registered by the phone autonomy service. Before any direct/manual mode
+  // command is sent, the active autonomy loop gets a chance to terminate.
+  Future<void> Function()? beforeManualMode;
+
   RoverCommandService(this.bluetoothService);
 
   Stream<CommandTrace> get traces => _traces.stream;
@@ -30,14 +34,24 @@ class RoverCommandService {
     }
   }
 
-  Future<void> manualMode() => sendCommand('MANUAL MODE', 'M', source: CommandSource.system);
-  Future<void> autopilotMode() => sendCommand('AUTONOMOUS MODE', 'F', source: CommandSource.system);
+  Future<void> _manualModeRaw() =>
+      sendCommand('MANUAL MODE', 'M', source: CommandSource.system);
+
+  Future<void> manualMode() async {
+    // This path is used by mode screens and the manual UI. It must terminate
+    // phone autonomy before M is written to the rover.
+    await beforeManualMode?.call();
+    await _manualModeRaw();
+  }
+
+  Future<void> autopilotMode() =>
+      sendCommand('AUTONOMOUS MODE', 'F', source: CommandSource.system);
 
   // Every firmware mode transition first sends STOP. This is intentionally
   // serialized so an old control loop cannot keep driving after a switch.
   Future<void> enterManualMode() async {
     await stop(source: CommandSource.system);
-    await manualMode();
+    await _manualModeRaw();
   }
 
   Future<void> enterAutonomousMode() async {
@@ -63,5 +77,8 @@ class RoverCommandService {
   Future<void> increaseSpeed({CommandSource source = CommandSource.human}) => sendCommand('SPEED UP', '+', source: source);
   Future<void> decreaseSpeed({CommandSource source = CommandSource.human}) => sendCommand('SPEED DOWN', '-', source: source);
 
-  void dispose() => _traces.close();
+  void dispose() {
+    beforeManualMode = null;
+    _traces.close();
+  }
 }
