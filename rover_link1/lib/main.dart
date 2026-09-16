@@ -11,7 +11,7 @@ import 'services/bluetooth_service.dart';
 import 'services/rover_command_service.dart';
 import 'services/rover_telemetry_service.dart';
 import 'services/rover_dataset_service.dart';
-import 'services/rover_autonomy_service.dart';
+import 'services/rover_ai_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,9 +66,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return SplashScreen(onFinished: _openHome);
-  }
+  Widget build(BuildContext context) => SplashScreen(onFinished: _openHome);
 }
 
 class MainNavigationScreen extends StatefulWidget {
@@ -85,7 +83,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   late final RoverCommandService roverCommandService;
   late final RoverTelemetryService roverTelemetryService;
   late final RoverDatasetService roverDatasetService;
-  late final RoverAutonomyService roverAutonomyService;
+  late final RoverAiService roverAiService;
   late int _currentIndex;
 
   @override
@@ -95,44 +93,63 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     roverCommandService = RoverCommandService(bluetoothService);
     roverTelemetryService = RoverTelemetryService(bluetoothService);
     roverDatasetService = RoverDatasetService();
-    roverAutonomyService = RoverAutonomyService(
+    roverAiService = RoverAiService(
       telemetryService: roverTelemetryService,
       commands: roverCommandService,
-      dataset: roverDatasetService,
     );
   }
 
   void _onNavTap(int index) {
-    if (index >= 0 && index <= 4 && index != _currentIndex) {
+    if (index >= 0 && index <= 4) {
       setState(() => _currentIndex = index);
     }
   }
 
+  Future<void> _onConnected() async {
+    if (!bluetoothService.isReady) return;
+    roverTelemetryService.start();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return IndexedStack(
-      index: _currentIndex,
-      children: [
-        HomeScreen(onNavTap: _onNavTap),
-        DriveScreen(
-          onNavTap: _onNavTap,
-          roverCommandService: roverCommandService,
-        ),
-        RadarScreen(onNavTap: _onNavTap),
-        AiScreen(onNavTap: _onNavTap),
-        SettingsScreen(
-          onNavTap: _onNavTap,
-          bluetoothService: bluetoothService,
-          onConnected: roverAutonomyService.startBaseline,
-        ),
-      ],
+    return Scaffold(
+      body: IndexedStack(
+        index: _currentIndex,
+        children: [
+          HomeScreen(
+            onNavTap: _onNavTap,
+            telemetryService: roverTelemetryService,
+            bluetoothService: bluetoothService,
+          ),
+          DriveScreen(
+            onNavTap: _onNavTap,
+            roverCommandService: roverCommandService,
+          ),
+          RadarScreen(
+            onNavTap: _onNavTap,
+            telemetryService: roverTelemetryService,
+          ),
+          AiScreen(
+            onNavTap: _onNavTap,
+            aiService: roverAiService,
+            telemetryService: roverTelemetryService,
+            bluetoothService: bluetoothService,
+          ),
+          SettingsScreen(
+            onNavTap: _onNavTap,
+            bluetoothService: bluetoothService,
+            onConnected: _onConnected,
+          ),
+        ],
+      ),
     );
   }
 
   @override
   void dispose() {
-    roverAutonomyService.stop();
+    roverAiService.dispose();
     roverTelemetryService.dispose();
+    bluetoothService.disconnect();
     super.dispose();
   }
 }
