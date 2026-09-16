@@ -3,6 +3,7 @@ import 'dart:async';
 import '../models/rover_telemetry.dart';
 import 'rover_command_service.dart';
 import 'rover_telemetry_service.dart';
+import '../models/command_trace.dart';
 
 enum AiAction { stop, forward, left, right }
 enum AiRunState { stopped, starting, running, following, error }
@@ -66,7 +67,6 @@ class RoverAiService {
 
   Future<void> start() async {
     if (_state == AiRunState.running || _state == AiRunState.starting) return;
-
     await _prepareController(AiRunState.starting);
     try {
       _subscription = telemetryService.telemetry.listen(_onTelemetry);
@@ -82,7 +82,6 @@ class RoverAiService {
 
   Future<void> startFollow() async {
     if (_state == AiRunState.following || _state == AiRunState.starting) return;
-
     await _prepareController(AiRunState.starting);
     try {
       _subscription = telemetryService.telemetry.listen(_onFollowTelemetry);
@@ -108,9 +107,6 @@ class RoverAiService {
 
     final targetDistance = telemetry.targetDistanceCm;
     final targetAngle = telemetry.targetAngleDeg;
-
-    // Follow-me needs an actual target estimate. Never confuse the radar
-    // servo's sweep angle with a target bearing.
     if (targetDistance == null || targetAngle == null) return;
 
     _busy = true;
@@ -118,18 +114,15 @@ class RoverAiService {
     _inFlight = inFlight;
 
     try {
-      AiAction action;
-      if (targetDistance <= followStopCm) {
-        action = AiAction.stop;
-      } else if (targetAngle < -followAngleDeadbandDeg) {
-        action = AiAction.left;
-      } else if (targetAngle > followAngleDeadbandDeg) {
-        action = AiAction.right;
-      } else if (targetDistance > followDesiredCm) {
-        action = AiAction.forward;
-      } else {
-        action = AiAction.stop;
-      }
+      final action = targetDistance <= followStopCm
+          ? AiAction.stop
+          : targetAngle < -followAngleDeadbandDeg
+              ? AiAction.left
+              : targetAngle > followAngleDeadbandDeg
+                  ? AiAction.right
+                  : targetDistance > followDesiredCm
+                      ? AiAction.forward
+                      : AiAction.stop;
 
       switch (action) {
         case AiAction.forward:
@@ -160,7 +153,6 @@ class RoverAiService {
   Future<void> stop() async {
     final wasActive = _state != AiRunState.stopped;
     _state = AiRunState.stopped;
-
     await _subscription?.cancel();
     _subscription = null;
 
@@ -170,7 +162,6 @@ class RoverAiService {
     }
 
     _resetSweepMemory();
-
     if (wasActive) {
       try {
         await commands.stop(source: CommandSource.system);
@@ -180,7 +171,6 @@ class RoverAiService {
 
   AiDecision decide(RoverTelemetry t) {
     _updateSweepMemory(t);
-
     final front = _frontClearanceCm ?? t.frontDistanceCm ?? 999;
     final left = _leftClearanceCm ?? front;
     final right = _rightClearanceCm ?? front;
@@ -192,7 +182,6 @@ class RoverAiService {
     final l = _clearanceScore(left);
     final f = _clearanceScore(front);
     final r = _clearanceScore(right);
-
     double leftScore = l;
     double rightScore = r;
     double forwardScore = f;
@@ -204,7 +193,6 @@ class RoverAiService {
     AiAction action;
     double best;
     double second;
-
     if (forwardScore >= leftScore && forwardScore >= rightScore) {
       action = AiAction.forward;
       best = forwardScore;
@@ -226,7 +214,6 @@ class RoverAiService {
     }
 
     final confidence = ((best - second).abs() + 0.5).clamp(0.5, 0.99).toDouble();
-
     return AiDecision(
       action: action,
       confidence: confidence,
@@ -250,7 +237,6 @@ class RoverAiService {
   void _updateSweepMemory(RoverTelemetry t) {
     final distance = t.ultrasonicDistanceCm ?? t.frontDistanceCm;
     final angle = t.radarAngleDeg;
-
     if (distance == null || angle == null) return;
 
     if (angle >= 70 && angle <= 110) {
@@ -269,7 +255,6 @@ class RoverAiService {
 
   Future<void> _onTelemetry(RoverTelemetry telemetry) async {
     if (_state != AiRunState.running || _busy) return;
-
     _busy = true;
     final inFlight = Completer<void>();
     _inFlight = inFlight;
@@ -278,7 +263,6 @@ class RoverAiService {
       final decision = decide(telemetry);
       _lastDecision = decision;
       _decisions.add(decision);
-
       switch (decision.action) {
         case AiAction.forward:
           await commands.moveForward(source: CommandSource.ai);
