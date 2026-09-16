@@ -3,17 +3,29 @@ import 'package:flutter/material.dart';
 import '../models/radar_detection.dart';
 import '../models/rover_telemetry.dart';
 import '../services/bluetooth_service.dart';
+import '../services/rover_ai_service.dart';
+import '../services/rover_command_service.dart';
 import '../services/rover_telemetry_service.dart';
 import '../theme/rover_colors.dart';
 import '../widgets/radar_scope.dart';
 import '../widgets/rover_bottom_nav.dart';
+import 'mode_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final ValueChanged<int>? onNavTap;
   final RoverTelemetryService telemetryService;
   final BluetoothService bluetoothService;
+  final RoverCommandService commandService;
+  final RoverAiService aiService;
 
-  const HomeScreen({super.key, this.onNavTap, required this.telemetryService, required this.bluetoothService});
+  const HomeScreen({
+    super.key,
+    this.onNavTap,
+    required this.telemetryService,
+    required this.bluetoothService,
+    required this.commandService,
+    required this.aiService,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -49,6 +61,36 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     });
+  }
+
+  void _openMode(String mode) {
+    final roverMode = switch (mode) {
+      'MANUAL' => RoverMode.manual,
+      'ASSISTED' => RoverMode.assisted,
+      'FOLLOW ME' => RoverMode.followMe,
+      'AUTONOMOUS' => RoverMode.autonomous,
+      _ => RoverMode.manual,
+    };
+
+    setState(() => _selectedMode = mode);
+
+    if (roverMode == RoverMode.manual) {
+      widget.onNavTap?.call(1);
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ModeScreen(
+          mode: roverMode,
+          onNavTap: widget.onNavTap,
+          commandService: widget.commandService,
+          aiService: widget.aiService,
+          telemetryService: widget.telemetryService,
+          bluetoothService: widget.bluetoothService,
+        ),
+      ),
+    );
   }
 
   @override
@@ -175,7 +217,16 @@ class _HomeScreenState extends State<HomeScreen> {
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('CONTROL MODE', style: TextStyle(color: RoverColors.textMuted, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1.3)),
       const SizedBox(height: 11),
-      Wrap(spacing: 7, runSpacing: 7, children: ['MANUAL', 'ASSISTED', 'FOLLOW ME', 'AUTONOMOUS'].map((mode) => ChoiceChip(label: Text(mode, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800)), selected: _selectedMode == mode, onSelected: (_) => setState(() => _selectedMode = mode), selectedColor: RoverColors.radarGreen.withValues(alpha: .18), backgroundColor: RoverColors.backgroundSecondary, side: const BorderSide(color: RoverColors.cardBorder))).toList()),
+      Wrap(spacing: 7, runSpacing: 7, children: ['MANUAL', 'ASSISTED', 'FOLLOW ME', 'AUTONOMOUS'].map((mode) => ChoiceChip(
+        label: Text(mode, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800)),
+        selected: _selectedMode == mode,
+        onSelected: (_) => _openMode(mode),
+        selectedColor: RoverColors.radarGreen.withValues(alpha: .18),
+        backgroundColor: RoverColors.backgroundSecondary,
+        side: const BorderSide(color: RoverColors.cardBorder),
+      )).toList()),
+      const SizedBox(height: 10),
+      const Text('Tap a mode to open its dedicated control page.', style: TextStyle(color: RoverColors.textMuted, fontSize: 9)),
     ]),
   );
 
