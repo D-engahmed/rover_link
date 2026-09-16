@@ -5,7 +5,6 @@ import 'rover_command_service.dart';
 import 'rover_telemetry_service.dart';
 
 enum AiAction { stop, forward, left, right }
-
 enum AiRunState { stopped, starting, running, error }
 
 class AiDecision {
@@ -35,11 +34,11 @@ class AiDecision {
 
 /// Local navigation policy executed on the phone.
 ///
-/// This is deliberately independent from the UI and backend. It consumes the
-/// live telemetry stream and produces bounded movement decisions. The current
-/// policy is the deployable baseline while a trained neural model is being
+/// The policy is deliberately independent from the UI and backend. It consumes
+/// live telemetry and produces bounded movement decisions. This is the
+/// deployable navigation baseline while a trained neural model is being
 /// collected/evaluated. A trained model can replace decide() without changing
-/// the app navigation or STM32 command contract.
+/// the UI or STM32 command contract.
 class RoverAiService {
   static const double emergencyStopCm = 18;
   static const double obstacleCm = 45;
@@ -72,7 +71,6 @@ class RoverAiService {
       await commands.autopilotMode();
       await _subscription?.cancel();
       _subscription = telemetryService.telemetry.listen(_onTelemetry);
-      telemetryService.start();
       _state = AiRunState.running;
     } catch (_) {
       _state = AiRunState.error;
@@ -106,7 +104,6 @@ class RoverAiService {
       );
     }
 
-    // Normalize clearance. Larger is safer.
     final l = _clearanceScore(left);
     final f = _clearanceScore(front);
     final r = _clearanceScore(right);
@@ -114,9 +111,8 @@ class RoverAiService {
     final targetAngle = t.targetAngleDeg;
     final targetBias = targetAngle == null
         ? 0.0
-        : (targetAngle - 90.0).clamp(-60.0, 60.0) / 60.0;
+        : ((targetAngle - 90.0).clamp(-60.0, 60.0) / 60.0).toDouble();
 
-    // Small target-following bias, dominated by obstacle clearance.
     final leftScore = l - (targetBias > 0 ? targetBias * 0.10 : 0);
     final rightScore = r + (targetBias > 0 ? targetBias * 0.10 : 0);
     final forwardScore = f + (1 - targetBias.abs()) * 0.08;
@@ -143,7 +139,7 @@ class RoverAiService {
       second = forwardScore > leftScore ? forwardScore : leftScore;
     }
 
-    final confidence = ((best - second).abs() + 0.5).clamp(0.5, 0.99);
+    final confidence = ((best - second).abs() + 0.5).clamp(0.5, 0.99).toDouble();
 
     return AiDecision(
       action: action,
@@ -157,7 +153,7 @@ class RoverAiService {
 
   double _clearanceScore(double distanceCm) {
     if (distanceCm <= emergencyStopCm) return 0;
-    return (distanceCm / 150).clamp(0.0, 1.0);
+    return (distanceCm / 150).clamp(0.0, 1.0).toDouble();
   }
 
   Future<void> _onTelemetry(RoverTelemetry telemetry) async {
