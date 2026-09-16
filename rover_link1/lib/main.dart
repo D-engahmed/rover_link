@@ -118,30 +118,57 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  Future<void> _enterManualMode() async {
-    if (_manualTransitionBusy || !bluetoothService.isReady) return;
+  /// Manual is a real rover-mode transition, not just a page navigation.
+  ///
+  /// The ordering is deliberately strict:
+  ///   1. Stop the phone-side autonomous/follow controller.
+  ///   2. Send P so the rover is physically stopped.
+  ///   3. Send M so the STM32 enters MANUAL mode.
+  ///   4. Only after M has been sent successfully do we expose Drive.
+  ///
+  /// Therefore Drive can never start sending W/A/S/D while the firmware is
+  /// still in PHONE_AUTONOMY.
+  Future<bool> _enterManualMode() async {
+    if (_manualTransitionBusy) return false;
+    if (!bluetoothService.isReady) return false;
+
     _manualTransitionBusy = true;
 
     try {
-      // Stop the phone AI loop first. RoverAiService.stop() waits for an
-      // in-flight AI command before returning, so a late W/A/D packet cannot
-      // arrive after the manual-mode command.
+      // Kill every phone-side controller first. This does not send a rover
+      // command; it only prevents an old controller from producing another
+      // movement packet during the mode transition.
       await roverAiService.stop();
 
-      // Firmware transition is serialized as STOP -> MANUAL MODE.
+      // enterManualMode serializes the firmware transition as P -> M.
+      // It also waits for the configured controller transition hook.
       await roverCommandService.enterManualMode();
+
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not enter Manual mode: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
     } finally {
       _manualTransitionBusy = false;
     }
   }
 
-  void _onNavTap(int index) {
+  Future<void> _onNavTap(int index) async {
     if (index < 0 || index > 4) return;
 
-    // Drive is the manual-control surface. Entering it must also change the
-    // actual STM32 control mode; changing only the Flutter page is unsafe.
+    // Drive is the manual-control surface. Do NOT switch the IndexedStack
+    // first. The old screen/controller must remain authoritative until the
+    // STM32 has accepted the Manual-mode transition.
     if (index == 1) {
-      _enterManualMode();
+      final enteredManual = await _enterManualMode();
+      if (!enteredManual || !mounted) return;
     }
 
     if (mounted) {
