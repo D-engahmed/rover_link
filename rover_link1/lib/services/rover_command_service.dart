@@ -7,8 +7,6 @@ class RoverCommandService {
   final BluetoothService bluetoothService;
   final StreamController<CommandTrace> _traces = StreamController<CommandTrace>.broadcast();
 
-  // Registered by the phone autonomy service. Before any direct/manual mode
-  // command is sent, the active autonomy loop gets a chance to terminate.
   Future<void> Function()? beforeManualMode;
 
   RoverCommandService(this.bluetoothService);
@@ -38,8 +36,6 @@ class RoverCommandService {
       sendCommand('MANUAL MODE', 'M', source: CommandSource.system);
 
   Future<void> manualMode() async {
-    // This path is used by mode screens and the manual UI. It must terminate
-    // phone autonomy before M is written to the rover.
     await beforeManualMode?.call();
     await _manualModeRaw();
   }
@@ -47,9 +43,10 @@ class RoverCommandService {
   Future<void> autopilotMode() =>
       sendCommand('AUTONOMOUS MODE', 'F', source: CommandSource.system);
 
-  // Every firmware mode transition first sends STOP. This is intentionally
-  // serialized so an old control loop cannot keep driving after a switch.
   Future<void> enterManualMode() async {
+    // Kill any active phone controller before changing the firmware mode.
+    // The hook waits for in-flight AI/follow commands to finish.
+    await beforeManualMode?.call();
     await stop(source: CommandSource.system);
     await _manualModeRaw();
   }
