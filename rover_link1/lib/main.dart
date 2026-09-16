@@ -120,6 +120,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             onNavTap: _onNavTap,
             telemetryService: roverTelemetryService,
             bluetoothService: bluetoothService,
+            commandService: roverCommandService,
+            aiService: roverAiService,
           ),
           DriveScreen(
             onNavTap: _onNavTap,
