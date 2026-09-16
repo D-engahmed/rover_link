@@ -3,6 +3,8 @@ class RoverTelemetry {
   final double? frontDistanceCm;
   final double? leftDistanceCm;
   final double? rightDistanceCm;
+  final double? ultrasonicDistanceCm;
+  final double? radarAngleDeg;
   final double? targetDistanceCm;
   final double? targetAngleDeg;
   final double? speedCmS;
@@ -14,6 +16,8 @@ class RoverTelemetry {
     this.frontDistanceCm,
     this.leftDistanceCm,
     this.rightDistanceCm,
+    this.ultrasonicDistanceCm,
+    this.radarAngleDeg,
     this.targetDistanceCm,
     this.targetAngleDeg,
     this.speedCmS,
@@ -25,16 +29,22 @@ class RoverTelemetry {
 
   factory RoverTelemetry.fromJson(Map<String, dynamic> json) {
     final rawTimestamp = (json['timestamp_ms'] as num?)?.toInt();
-    final rawTargetAngle = _number(json['target_angle_deg']) ?? _number(json['radar_angle_deg']);
+    final radarAngle = _number(json['radar_angle_deg']);
+    final targetAngle = _number(json['target_angle_deg']) ?? radarAngle;
+    final ultrasonic = _number(json['ultrasonic_distance_cm']);
+    final front = _number(json['front_distance_cm']) ?? ultrasonic;
+
     return RoverTelemetry(
       timestampMs: rawTimestamp == null || rawTimestamp <= 0
           ? DateTime.now().millisecondsSinceEpoch
           : rawTimestamp,
-      frontDistanceCm: _number(json['front_distance_cm']),
+      frontDistanceCm: front,
       leftDistanceCm: _number(json['left_distance_cm']),
       rightDistanceCm: _number(json['right_distance_cm']),
+      ultrasonicDistanceCm: ultrasonic,
+      radarAngleDeg: radarAngle,
       targetDistanceCm: _number(json['target_distance_cm']),
-      targetAngleDeg: rawTargetAngle,
+      targetAngleDeg: targetAngle,
       speedCmS: _number(json['speed_cm_s']),
       rssiDbm: (json['rssi_dbm'] as num?)?.toInt(),
       mode: json['mode']?.toString(),
@@ -46,6 +56,8 @@ class RoverTelemetry {
         'front_distance_cm': frontDistanceCm,
         'left_distance_cm': leftDistanceCm,
         'right_distance_cm': rightDistanceCm,
+        'ultrasonic_distance_cm': ultrasonicDistanceCm,
+        'radar_angle_deg': radarAngleDeg,
         'target_distance_cm': targetDistanceCm,
         'target_angle_deg': targetAngleDeg,
         'speed_cm_s': speedCmS,
