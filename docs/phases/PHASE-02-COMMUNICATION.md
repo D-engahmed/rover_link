@@ -1,16 +1,13 @@
-# Phase 02 — Rover communication protocol
+# Phase 02 — Rover communication
 
-Replace single-character motor commands with a framed protocol while keeping the legacy command service available during migration.
+## Status: Partial / migration layer
 
-Frame:
+The repository defines a framed protocol:
 
-`SOF | VERSION | TYPE | SEQUENCE | LENGTH | PAYLOAD | CRC16`
+~~~text
+SOF | VERSION | TYPE | SEQUENCE | LENGTH | PAYLOAD | CRC16
+~~~
 
-The protocol supports heartbeat, command, telemetry, ACK, and error messages.
+It includes typed message/command enums and a CRC16 encoder.
 
-## Acceptance criteria
-- Corrupt frames are rejected by CRC.
-- Every command can be correlated using a sequence number.
-- Telemetry is structured and machine-readable.
-- A heartbeat is available for link supervision.
-- Legacy W/S/A/D/P commands can be mapped to the new command enum during transition.
+The active runtime is still one-byte commands plus newline-delimited JSON telemetry. A complete migration needs a decoder, sequence correlation, heartbeat frames, ACK/error handling, and compatibility tests.

@@ -1,17 +1,18 @@
-# Phase 03 — Flutter ↔ rover integration
+# Phase 03 — Flutter integration
 
-The Flutter application already has Bluetooth scanning/connection and a command service. This phase adds a typed rover state boundary and a telemetry parser so UI code does not directly interpret raw Bluetooth strings.
+## Status: Partial / core implemented
 
-## Target flow
-BluetoothService → protocol adapter → telemetry parser → RoverState → screens.
+Implemented:
+- Bluetooth scan/connect/disconnect;
+- typed RoverTelemetry;
+- shared command service;
+- shared telemetry service;
+- mode-aware UI;
+- command trace;
+- radar/telemetry surfaces.
 
-## Required production work
-- Replace polling-style UI state with a single connection/session controller.
-- Add reconnect and heartbeat supervision.
-- Expose RSSI as connection quality/proximity evidence, not precise distance.
-- Add an emergency-stop action available from every driving screen.
-
-## Acceptance criteria
-- Manual driving remains available after migration.
-- UI can display connection, battery, motion, sensor, and target state from one typed model.
-- Bluetooth disconnect transitions the rover state to disconnected/reconnecting.
+Remaining:
+- centralized connection/session controller;
+- full reconnect supervision;
+- single-source safety policy;
+- execution ACK.

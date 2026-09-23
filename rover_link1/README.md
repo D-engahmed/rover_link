@@ -1,17 +1,60 @@
-# rover_link1
+# Rover Link mobile application
 
-A new Flutter project.
+This directory contains the Flutter Android application for Rover Link.
 
-## Getting Started
+## Responsibilities
 
-This project is a starting point for a Flutter application.
+The app is the operator/control and data-collection node.
 
-A few resources to get you started if this is your first Flutter project:
+It provides:
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- Bluetooth discovery and connection;
+- manual driving;
+- assisted driving;
+- phone-side deterministic autonomy;
+- Follow Me control from target telemetry;
+- live telemetry and radar visualization;
+- command-source/lifecycle tracing;
+- local JSONL dataset recording.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Runtime architecture
+
+~~~text
+BluetoothService
+      ↓
+RoverCommandService
+      ↓
+STM32 commands
+
+BluetoothService
+      ↓
+RoverTelemetryService
+      ↓
+RoverTelemetry
+      ├→ UI
+      ├→ RoverAiService
+      └→ RoverDatasetService
+~~~
+
+Long-lived services are created by the main navigation shell and shared across screens.
+
+## Important boundaries
+
+- The STM32 remains the final hardware safety authority.
+- SENT means Bluetooth write success, not hardware execution.
+- The current autonomous controller is deterministic; the PPO experiment under rover_rl/ is not integrated here.
+- Follow Me currently expects target distance/angle telemetry; no camera/vision service is present in this tree.
+- The active command protocol is single-byte, not yet the framed CRC protocol.
+
+## Development
+
+Use the Flutter toolchain documented in the root project documentation:
+
+~~~bash
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release
+~~~
+
+See ../docs/FLUTTER_APP.md for the full application architecture and ../docs/TESTING_AND_VALIDATION.md for validation requirements.

@@ -1,83 +1,62 @@
-# Rover Link — On-Device AI Verification
+# Rover Link — on-device AI verification
 
-## Runtime
+## What the current app runs
 
-The current rover navigation AI runs inside the Flutter Android application. It is not a backend request and does not require Internet access for inference.
+The current Flutter AI Autopilot is the deterministic navigation baseline in RoverAiService. It is not the PPO model in rover_rl/.
 
-```text
+~~~text
 STM32 sensors
-    ↓ Bluetooth telemetry
-Flutter Android app
     ↓
-RoverAiService
+Bluetooth telemetry
     ↓
-navigation decision
+RoverTelemetryService
+    ↓
+RoverAiService.decide()
     ↓
 RoverCommandService
-    ↓ Bluetooth write
+    ↓ Bluetooth
 STM32
-```
+~~~
 
-The current implementation is a deterministic navigation baseline (`rover_navigation_policy_v0.1`), not a trained neural network. A trained mobile model can replace the decision function later without changing the UI/command trace contract.
+## Manual verification
 
-## How to verify the output
+1. Build and install the Android APK.
+2. Pair the phone with the rover Bluetooth module.
+3. Connect from Settings.
+4. Wait for Bluetooth READY.
+5. Open AI Autopilot.
+6. Confirm the runtime label is the deterministic baseline.
+7. Start AI.
+8. Vary the ultrasonic obstacle distance.
+9. Observe the AI decision and command trace.
+10. Verify Bluetooth TX state.
 
-1. Build/install the release APK.
-2. Connect the phone to the rover Bluetooth device.
-3. Open **AI Autopilot**.
-4. Confirm `Bluetooth = READY`.
-5. Press **START AI**.
-6. Confirm `AI AUTOPILOT = RUNNING`.
-7. Move an obstacle into/out of the ultrasonic field.
-8. Watch **Current AI Output** for the decision and confidence.
-9. Watch **AI → BLUETOOTH → STM32** for the last transmitted wire command and TX status.
-10. Use **Command Monitor** to inspect the complete event sequence.
+## Meaning of SENT
 
-Expected example:
+SENT means the Flutter Bluetooth write completed.
 
-```text
-AI output: FORWARD
-Last AI TX: W\r\n
-TX status: BLUETOOTH WRITE SUCCEEDED
-```
+It does not prove STM32 parsing, safety acceptance, or motor-driver execution.
 
-With a close obstacle, the baseline should select `STOP` when the emergency threshold is reached.
+Execution proof requires an STM32 acknowledgement path.
 
-## Command lifecycle
+## Current thresholds
 
-The app records:
+The phone-side AI uses an 18 cm emergency threshold and 45 cm obstacle threshold.
 
-```text
-PROPOSED → APPROVED → QUEUED → SENT
-```
+The active STM32 main.c uses a 30 cm forward safety threshold.
 
-or, when the Bluetooth write fails:
+These values are not identical and should eventually be consolidated.
 
-```text
-PROPOSED → APPROVED → QUEUED → FAILED
-```
+## RL boundary
 
-The trace records source (`AI`, `HUMAN`, `SAFETY`, `SYSTEM`), wire command, timestamp, and TX latency where available.
+The exported PPO Dart implementation is not connected to the current Flutter runtime.
 
-## What SENT means
+Before integration:
 
-`SENT` means the Flutter app successfully completed the Bluetooth write. It does **not** prove that the STM32 executed the command.
-
-An actual hardware acknowledgement requires an STM32 response protocol, for example:
-
-```text
-Flutter → W\r\n
-STM32   → ACK W\r\n
-```
-
-No STM32 firmware change is included in this app-only verification PR.
-
-## Training-model upgrade path
-
-When training data and weights are ready, the intended production path is:
-
-```text
-sensor telemetry → preprocessing → mobile model inference → safety filter → command trace → Bluetooth → STM32
-```
-
-The model must be benchmarked on representative real sensor sequences before replacing the baseline controller.
+- provide a real target-perception source;
+- match training feature semantics exactly;
+- test normalization;
+- keep a deterministic safety veto outside the model;
+- replay real telemetry;
+- compare against baseline;
+- validate physically at low speed.

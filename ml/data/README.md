@@ -1,25 +1,25 @@
 # Dataset and labeling workflow
 
-Each recording session gets a unique `session_id`. Never randomly split rows from the same physical run across train and test; that creates temporal/environment leakage.
+## Session identity
+
+Every physical recording session should have a unique session_id.
+
+Do not randomly split rows from the same physical run into train and test.
 
 ## Recommended labels
 
-Start with labels that the available sensors can actually support:
+- open_space
+- obstacle
+- human_candidate
+- vehicle_candidate
+- wall
+- unknown
 
-- `open_space`
-- `obstacle`
-- `human_candidate` — only when ground truth comes from a human observer or an additional human-detection sensor
-- `vehicle_candidate`
-- `wall`
-- `unknown`
+Human/vehicle candidate labels require suitable ground truth.
 
-Do **not** label `metal`, `wood`, etc. as if an HC-SR04 alone can reliably identify material. Add a sensor capable of providing material-discriminative information first.
+## Example
 
-## Label record
-
-A labeled sample is JSONL:
-
-```json
+~~~json
 {
   "timestamp_ms": 1760000000000,
   "session_id": "session-001",
@@ -36,6 +36,34 @@ A labeled sample is JSONL:
   "annotator": "human",
   "notes": "foam box at 84 cm"
 }
-```
+~~~
 
-Collect multiple sessions for every label. Vary distance, angle, environment, object orientation, and rover speed. Keep a test session completely separate from training sessions.
+## Collection protocol
+
+Vary:
+
+- distance;
+- angle;
+- environment;
+- object orientation;
+- rover speed;
+- approach direction;
+- sensor/no-echo conditions.
+
+Keep evaluation sessions independent.
+
+## HC-SR04 limitation
+
+An HC-SR04 distance reading is not a material signature. Do not convert the availability of ML tooling into a claim of metal/wood/material identification.
+
+## Label quality
+
+Preserve:
+
+- annotator;
+- confidence;
+- notes;
+- firmware version;
+- hardware version.
+
+When annotators disagree, retain that information instead of silently collapsing it.

@@ -1,11 +1,14 @@
-# Phase 04 — Autonomous obstacle avoidance
+# Phase 04 — Autonomous navigation
 
-Introduces a deterministic autonomy state contract and local navigation baseline. The AI is not allowed to bypass the safety layer.
+## Status: Partial / baseline implemented
 
-Inputs: front/left/right obstacle distances and an optional target bearing/distance.
+Implemented:
+- deterministic phone-side navigation;
+- servo-scan aggregation;
+- phone-autonomy mode;
+- safety-aware forward movement;
+- autonomous UI and traceability.
 
-Outputs: state, steering intent, and speed request.
+The embedded autonomy module exists as a separate contract, but the primary current phone runtime is RoverAiService.
 
-The baseline intentionally uses short closed-loop decisions: sense → decide → move briefly → sense again.
-
-Acceptance: stale/invalid sensor data stops the rover; near obstacles stop the rover; clear-space steering chooses the safer side; target approach stops at the configured alignment/approach boundary.
+Two baseline controllers currently use different thresholds. Consolidate them before productionization.
