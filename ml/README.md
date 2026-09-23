@@ -1,78 +1,29 @@
 # Rover ML Pipeline
 
-This directory contains the offline dataset, training, and evaluation pipeline for Rover Link perception experiments.
+The ml/ directory contains offline collection, training, and evaluation tooling for Rover Link.
 
-## Important scope
+## Flow
 
-The current HC-SR04 hardware reports echo-derived distance. It does **not** expose the raw acoustic waveform required to claim reliable material classification. The pipeline therefore supports labels such as `obstacle`, `human_candidate`, `wall`, `vehicle`, etc. only when those labels are backed by appropriate ground truth. Do not interpret a trained classifier as material identification unless the sensor hardware provides sufficient information.
+telemetry -> Flutter local JSONL -> normalization -> session-aware split -> training -> held-out evaluation
 
-## Layout
+## Components
 
-```text
-ml/
-├── README.md
-├── requirements.txt
-├── schema/
-│   └── sample.schema.json
-├── data/
-│   ├── raw/.gitkeep
-│   ├── labeled/.gitkeep
-│   ├── splits/.gitkeep
-│   └── README.md
-├── collector/
-│   ├── __init__.py
-│   └── collect.py
-├── training/
-│   ├── __init__.py
-│   └── train.py
-├── evaluation/
-│   ├── __init__.py
-│   └── evaluate.py
-└── models/.gitkeep
-```
+- collector/collect.py: normalizes telemetry records and preserves session/model metadata.
+- training/train.py: Random Forest perception baseline.
+- training/train_policy.py: behavior-cloning control policy.
+- evaluation/: held-out reports and confusion matrices.
+- schema/: common sample schema.
 
-## Dataset flow
+## Evaluation rule
 
-```text
-STM32 telemetry JSONL
-        ↓
-collector / raw recorder
-        ↓
-JSONL samples
-        ↓
-manual or assisted labels
-        ↓
-labeled dataset
-        ↓
-group-aware train/validation/test split
-        ↓
-model training
-        ↓
-evaluation + confusion matrix
-        ↓
-versioned model artifact
-```
+Samples from one physical recording session are correlated. The current training/evaluation scripts therefore group by session_id instead of randomly splitting individual rows.
 
-The split is group-aware so samples from one recording session are not randomly leaked across train and test sets.
+## Sensing boundary
 
-## Quick start
+HC-SR04 supplies range/echo timing. It does not by itself justify arbitrary material classification. Any human/vehicle/material label needs suitable ground truth or additional sensing.
 
-```bash
-cd ml
-python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
+## Learning tracks
 
-python collector/collect.py --input telemetry.jsonl --output data/raw/session.jsonl
-python training/train.py --input data/labeled/dataset.jsonl --output models/rover_perception.joblib
-python evaluation/evaluate.py --dataset data/labeled/dataset.jsonl --model models/rover_perception.joblib --output evaluation_report.json
-```
+The supervised ML pipeline in ml/ is separate from the NumPy PPO experiment in rover_rl/.
 
-For the first hardware run, the collector can also read stdin:
-
-```bash
-python collector/collect.py --output data/raw/session.jsonl
-```
-
-Paste one telemetry JSON object per line and press Enter. Stop with Ctrl+C.
+For reproducibility, record dataset/session IDs, firmware/hardware versions, feature definitions, model configuration, seed, split protocol, metrics, and artifact.
